@@ -34,7 +34,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 socketio = SocketIO(app)
-login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
 # !!! ГЛОБАЛЬНАЯ КАРТА: Хранит, в какой комнате находится пользователь (по ID) !!!
