@@ -30,7 +30,7 @@ client = WebApplicationClient(app.config['GOOGLE_CLIENT_ID'])
 
 
 # --- КОНФИГУРАЦИЯ БАЗЫ ДАННЫХ ---
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///chat_history.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL") or 'sqlite:///chat.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
