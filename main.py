@@ -4,7 +4,6 @@ from datetime import datetime
 
 from flask import Flask, render_template, redirect, url_for, request, session, abort
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user, login_required
 from flask_sqlalchemy import SQLAlchemy
 
 from oauthlib.oauth2 import WebApplicationClient
