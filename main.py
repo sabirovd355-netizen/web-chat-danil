@@ -12,6 +12,12 @@ import requests
 
 # --- 1. Конфигурация и Инициализация ---
 app = Flask(__name__)
+
+# !!! ИСПРАВЛЕНИЕ ДЛЯ RAILWAY (HTTPS) !!!
+# Говорим Flask, что мы находимся за прокси-сервером, и нужно использовать HTTPS.
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
 # Устанавливаем секретный ключ для защиты сессий
 # Используем переменную окружения SECRET_KEY или генерируем случайный для локального запуска
 app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", secrets.token_hex(16))
@@ -67,11 +73,6 @@ class Message(db.Model):
     text = db.Column(db.String(500), nullable=False)
     timestamp = db.Column(db.DateTime, index=True, default=lambda: datetime.now(timezone.utc))
     room_code = db.Column(db.String(50), nullable=False) 
-
-# Создаем базу данных и таблицы, если они не существуют
-def init_db():
-    with app.app_context():
-        db.create_all()
 
 # --- 3. Функции Аутентификации и Пользователей ---
 
@@ -297,7 +298,8 @@ def handle_typing_stop():
 
 # --- 7. Запуск ---
 if __name__ == '__main__':
-    # Инициализация базы данных перед первым запуском
-    init_db()
+    # В Railway таблицы должны быть созданы вручную или через миграции, 
+    # чтобы избежать ошибок при запуске.
+    
     # Запуск SocketIO
     socketio.run(app, debug=True, host='0.0.0.0', port=os.getenv("PORT", 5000))
