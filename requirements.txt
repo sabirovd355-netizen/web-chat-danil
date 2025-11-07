@@ -5,3 +5,4 @@ requests
 oauthlib
 gunicorn
 psycopg2-binary
+psycopg2
