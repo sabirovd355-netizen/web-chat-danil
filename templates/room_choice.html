@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Выбор комнаты</title>
+    <style>
+        body { font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f4f4f9; }
+        .container { background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); width: 300px; text-align: center; }
+        h1 { color: #333; }
+        input[type="text"] { width: 90%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; width: 100%; }
+        button:hover { background-color: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Добро пожаловать, {{ username }}!</h1>
+        <p>Выберите, что вы хотите сделать:</p>
+        
+        <form id="joinForm">
+            <input type="text" id="joinCode" placeholder="Введите код комнаты" required>
+            <button type="submit">Присоединиться</button>
+        </form>
+
+        <form id="createForm">
+            <input type="text" id="createCode" placeholder="Придумайте код комнаты (например, 'family_chat')" required>
+            <button type="submit">Создать новую</button>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('joinForm').onsubmit = function(event) {
+            event.preventDefault();
+            const code = document.getElementById('joinCode').value.trim();
+            if (code) {
+                window.location.href = '/chat/' + code;
+            }
+        };
+
+        document.getElementById('createForm').onsubmit = function(event) {
+            event.preventDefault();
+            const code = document.getElementById('createCode').value.trim();
+            if (code) {
+                // Создание новой комнаты - это просто переход по ссылке с новым кодом
+                window.location.href = '/chat/' + code;
+            }
+        };
+    </script>
+</body>
+</html>

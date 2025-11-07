@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Чат-комната: {{ room_code }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        /* Стиль для адаптивности */
+        body { background-color: #f0f2f5; }
+        .chat-container {
+            max-width: 700px;
+            margin: 0 auto;
+            height: 90vh; 
+            display: flex;
+            flex-direction: column;
+            background-color: white;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .chat-window {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+        .input-area {
+            padding: 1rem;
+            border-top: 1px solid #dee2e6;
+            background-color: #f8f9fa;
+        }
+        /* Стиль для сообщений других пользователей (слева) */
+        .bg-light { 
+            background-color: #e9e9eb !important; 
+            max-width: 80%;
+            margin-right: auto;
+        }
+        /* Стиль для ваших сообщений (справа) */
+        .bg-primary { 
+            background-color: #007bff !important; 
+            max-width: 80%;
+            margin-left: auto;
+        }
+        /* Стиль для системных сообщений */
+        .system-message {
+            text-align: center;
+            font-size: 0.8rem;
+            color: #6c757d;
+            margin: 0.5rem 0;
+        }
+        /* Индикатор печати */
+        #typing_indicator {
+            min-height: 1.5em; 
+            padding: 0 1rem;
+        }
+    </style>
+</head>
+<body>
+
+<div class="chat-container my-3">
+    <div class="p-3 bg-primary text-white">
+        <div class="d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">🔑 Комната: {{ room_code }}</h5>
+            <div>
+                <span class="me-2 fw-bold">{{ username }}</span>
+                <a href="{{ url_for('choose_room') }}" class="btn btn-warning btn-sm me-2">Сменить комнату</a>
+                <a href="{{ url_for('logout') }}" class="btn btn-danger btn-sm">Выход</a>
+            </div>
+        </div>
+    </div>
+    
+    <div id="messages" class="chat-window">
+        {% for message in history %}
+            <script>
+                document.addEventListener('DOMContentLoaded', () => {
+                    addMessage('{{ message.sender_name }}', '{{ message.text }}', '{{ message.timestamp.strftime("%H:%M:%S") }}');
+                });
+            </script>
+        {% endfor %}
+    </div>
+    
+    <div id="typing_indicator" class="text-secondary small">
+    </div>
+
+    <div class="input-area">
+        <div class="input-group">
+            <input type="text" id="message_input" class="form-control" placeholder="Напишите сообщение..." aria-label="Сообщение">
+            <button class="btn btn-success" type="button" id="send_button">Отправить</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.1.2/socket.io.js"></script>
+<script>
+    const socket = io();
+    const messagesDiv = document.getElementById('messages');
+    const messageInput = document.getElementById('message_input');
+    const sendButton = document.getElementById('send_button');
+    const typingIndicator = document.getElementById('typing_indicator');
+    
+    // !!! НОВОЕ: КОД КОМНАТЫ ИЗ FLASK !!!
+    const roomCode = '{{ room_code }}'; 
+    const currentUsername = '{{ username }}'; 
+
+
+    // --- 1. ЛОГИКА ПРИСОЕДИНЕНИЯ К КОМНАТЕ ---
+    socket.on('connect', function() {
+        console.log('Подключен к SocketIO. Присоединяюсь к комнате:', roomCode);
+        // Отправляем запрос на присоединение к комнате на сервер Flask
+        socket.emit('join', {room: roomCode});
+    });
+
+
+    // --- 2. Логика отображения сообщений ---
+    function addMessage(sender, text, timestamp) {
+        // Если это СИСТЕМНОЕ сообщение
+        if (sender === 'Система') {
+            const systemElement = document.createElement('div');
+            systemElement.classList.add('system-message');
+            systemElement.textContent = text;
+            messagesDiv.appendChild(systemElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            return;
+        }
+
+        // Если это ОБЫЧНОЕ сообщение
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('p-2', 'rounded', 'mb-2');
+        
+        // Форматируем время
+        const time = timestamp || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        
+        if (sender === currentUsername) {
+            // Сообщение ТЕКУЩЕГО пользователя (Справа, синий фон)
+            messageElement.classList.add('bg-primary', 'text-white', 'ms-auto');
+            messageElement.innerHTML = `
+                <p class="mb-0">${text}</p>
+                <small class="text-white-50 float-end">${time}</small>
+            `;
+        } else {
+            // Сообщение ДРУГОГО пользователя (Слева, светлый фон)
+            messageElement.classList.add('bg-light', 'text-dark', 'me-auto');
+            messageElement.innerHTML = `
+                <small class="fw-bold text-primary">${sender}</small>
+                <p class="mb-0">${text}</p>
+                <small class="text-secondary float-end">${time}</small>
+            `;
+        }
+        
+        messagesDiv.appendChild(messageElement);
+        // Прокрутка вниз
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    // --- 3. Логика отправки сообщений (Без изменений) ---
+    sendButton.onclick = function() {
+        sendMessage();
+    };
+
+    messageInput.onkeypress = function(e) {
+        if (e.key === 'Enter') {
+            sendMessage();
+            e.preventDefault();
+        }
+    };
+    
+    function sendMessage() {
+        const message = messageInput.value.trim();
+        if (message) {
+            // !!! НЕТ roomCode в emit, так как сервер знает комнату пользователя !!!
+            socket.emit('message_sent', { message: message }); 
+            messageInput.value = '';
+        }
+    }
+
+    // Обработчик входящих сообщений
+    socket.on('new_message', function(data) {
+        addMessage(data.sender, data.text, data.timestamp);
+    });
+    
+    // --- 4. Логика индикатора печати (Без изменений) ---
+    const typingUsers = new Set();
+    let typingTimer;
+    let isTyping = false;
+    
+    messageInput.addEventListener('input', () => {
+        if (!isTyping) {
+            isTyping = true;
+            socket.emit('typing_start');
+        }
+        
+        clearTimeout(typingTimer);
+        typingTimer = setTimeout(() => {
+            isTyping = false;
+            socket.emit('typing_stop');
+        }, 1500);
+    });
+
+    function updateTypingIndicator() {
+        
+        // Фильтруем пользователей, которые печатают, исключая текущего пользователя
+        const othersTyping = Array.from(typingUsers).filter(user => user !== currentUsername); 
+
+        if (othersTyping.length > 0) {
+            const list = othersTyping.join(', ');
+            typingIndicator.textContent = `${list} печатает...`;
+        } else {
+            typingIndicator.textContent = '';
+        }
+    }
+
+    // Обработчик получения сигнала о печати
+    socket.on('typing_update', function(data) {
+        if (data.is_typing) {
+            typingUsers.add(data.username);
+        } else {
+            typingUsers.delete(data.username);
+        }
+        updateTypingIndicator();
+    });
+
+</script>
+</body>
+</html>
