@@ -3,222 +3,252 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Чат-комната: {{ room_code }}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>Вход в Чат</title>
+    <!-- Используем Bootstrap для базового стиля -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        /* Стиль для адаптивности */
-        body { background-color: #f0f2f5; }
-        .chat-container {
-            max-width: 700px;
-            margin: 0 auto;
-            height: 90vh; 
-            display: flex;
-            flex-direction: column;
-            background-color: white;
-            border-radius: 0.75rem;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-            overflow: hidden;
-        }
-        .chat-window {
-            flex-grow: 1;
-            overflow-y: auto;
-            padding: 1rem;
-        }
-        .input-area {
-            padding: 1rem;
-            border-top: 1px solid #dee2e6;
+        body {
             background-color: #f8f9fa;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
         }
-        /* Стиль для сообщений других пользователей (слева) */
-        .bg-light { 
-            background-color: #e9e9eb !important; 
-            max-width: 80%;
-            margin-right: auto;
-        }
-        /* Стиль для ваших сообщений (справа) */
-        .bg-primary { 
-            background-color: #007bff !important; 
-            max-width: 80%;
-            margin-left: auto;
-        }
-        /* Стиль для системных сообщений */
-        .system-message {
+        .container {
+            max-width: 500px;
+            padding: 30px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
             text-align: center;
-            font-size: 0.8rem;
-            color: #6c757d;
-            margin: 0.5rem 0;
         }
-        /* Индикатор печати */
-        #typing_indicator {
-            min-height: 1.5em; 
-            padding: 0 1rem;
+        .btn-google {
+            background-color: #4285F4;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: bold;
+            margin-top: 20px;
         }
     </style>
 </head>
 <body>
+    <div class="container">
+        <h1 class="mb-4">Добро пожаловать в Чат!</h1>
+        <p class="text-muted">Это защищенный чат. Пожалуйста, войдите, используя ваш Google-аккаунт.</p>
 
-<div class="chat-container my-3">
-    <div class="p-3 bg-primary text-white">
-        <div class="d-flex justify-content-between align-items-center">
-            <h5 class="mb-0">🔑 Комната: {{ room_code }}</h5>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="list-unstyled">
+                {% for category, message in messages %}
+                    <li class="alert alert-{{ 'danger' if category == 'error' else 'info' }}">{{ message }}</li>
+                {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        {% if session.get('user_id') %}
+            <div class="mb-3">
+                <img src="{{ session.get('user_pic', 'https://via.placeholder.com/50') }}" class="rounded-circle" width="50" height="50" alt="Аватар">
+                <p class="mt-2">Вы вошли как <strong>{{ session.get('user_name', 'Неизвестный') }}</strong>.</p>
+            </div>
+            
+            <!-- ИСПРАВЛЕННЫЕ ССЫЛКИ: теперь ведет на 'chat' вместо несуществующего 'choose_room' -->
+            <a href="{{ url_for('chat') }}" class="btn btn-success me-2">Перейти в Чат</a>
+            <a href="{{ url_for('logout') }}" class="btn btn-danger">Выйти</a>
+
+        {% else %}
+            <!-- Ссылка на /login, которая инициирует процесс Google OAuth -->
+            <a href="{{ url_for('login') }}" class="btn btn-google">
+                <img src="https://img.icons8.com/color/16/000000/google-logo.png" alt="Google Logo"> 
+                Войти через Google
+            </a>
+        {% endif %}
+    </div>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Глобальный Чат: {{ room_name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { background-color: #e9ecef; }
+        .chat-container {
+            max-width: 800px;
+            height: 90vh;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            background-color: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            margin-top: 5vh;
+        }
+        .message-list {
+            flex-grow: 1;
+            padding: 15px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column-reverse; /* Показывает новые сообщения внизу */
+        }
+        .message-input {
+            padding: 15px;
+            border-top: 1px solid #dee2e6;
+        }
+        .message-item {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 15px;
+            animation: fadeIn 0.3s ease-out;
+        }
+        .message-item.status {
+            text-align: center;
+            font-style: italic;
+            color: #6c757d;
+            justify-content: center;
+        }
+        .user-pic {
+            width: 35px;
+            height: 35px;
+            min-width: 35px;
+            margin-right: 10px;
+        }
+        .message-content {
+            background-color: #f0f0f0;
+            padding: 8px 12px;
+            border-radius: 12px;
+            word-wrap: break-word;
+            max-width: 85%;
+        }
+        .message-info {
+            font-size: 0.75rem;
+            color: #6c757d;
+            margin-top: 2px;
+        }
+        .message-item.own .message-content {
+            background-color: #007bff;
+            color: white;
+        }
+        .message-item.own {
+            flex-direction: row-reverse;
+            text-align: right;
+        }
+        .message-item.own .user-pic {
+            margin-left: 10px;
+            margin-right: 0;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <header class="bg-primary text-white p-3 d-flex justify-content-between align-items-center">
+            <h5>Комната: {{ room_name }}</h5>
             <div>
-                <span class="me-2 fw-bold">{{ username }}</span>
-                <a href="{{ url_for('choose_room') }}" class="btn btn-warning btn-sm me-2">Сменить комнату</a>
-                <a href="{{ url_for('logout') }}" class="btn btn-danger btn-sm">Выход</a>
+                <img src="{{ user_pic }}" class="rounded-circle" width="30" height="30" alt="Аватар">
+                <span class="ms-2 me-3">{{ user_name }}</span>
+                <a href="{{ url_for('logout') }}" class="btn btn-danger btn-sm">Выйти</a>
+            </div>
+        </header>
+
+        <div class="message-list" id="message-list">
+            <!-- Сообщения будут добавляться сюда через JS (в обратном порядке) -->
+            {% for message in messages %}
+                <div class="message-item {% if message.user_name == user_name %}own{% endif %}">
+                    <img src="{{ message.user_pic or 'https://via.placeholder.com/35' }}" class="rounded-circle user-pic" alt="Аватар">
+                    <div class="message-body">
+                        <div class="message-content">
+                            {% if message.user_name != user_name %}
+                                <strong>{{ message.user_name }}:</strong>
+                            {% endif %}
+                            {{ message.content }}
+                        </div>
+                        <div class="message-info">{{ message.timestamp }}</div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+
+        <div class="message-input">
+            <div class="input-group">
+                <input type="text" id="message-input" class="form-control" placeholder="Напишите сообщение..." onkeydown="if(event.key === 'Enter') sendMessage()">
+                <button class="btn btn-primary" type="button" onclick="sendMessage()">Отправить</button>
             </div>
         </div>
     </div>
-    
-    <div id="messages" class="chat-window">
-        {% for message in history %}
-            <script>
-                document.addEventListener('DOMContentLoaded', () => {
-                    addMessage('{{ message.sender_name }}', '{{ message.text }}', '{{ message.timestamp.strftime("%H:%M:%S") }}');
-                });
-            </script>
-        {% endfor %}
-    </div>
-    
-    <div id="typing_indicator" class="text-secondary small">
-    </div>
 
-    <div class="input-area">
-        <div class="input-group">
-            <input type="text" id="message_input" class="form-control" placeholder="Напишите сообщение..." aria-label="Сообщение">
-            <button class="btn btn-success" type="button" id="send_button">Отправить</button>
-        </div>
-    </div>
-</div>
+    <script>
+        const socket = io();
+        const messageList = document.getElementById('message-list');
+        const userName = "{{ user_name }}"; // Имя текущего пользователя для определения своих сообщений
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.1.2/socket.io.js"></script>
-<script>
-    const socket = io();
-    const messagesDiv = document.getElementById('messages');
-    const messageInput = document.getElementById('message_input');
-    const sendButton = document.getElementById('send_button');
-    const typingIndicator = document.getElementById('typing_indicator');
-    
-    // !!! НОВОЕ: КОД КОМНАТЫ ИЗ FLASK !!!
-    const roomCode = '{{ room_code }}'; 
-    const currentUsername = '{{ username }}'; 
+        function insertMessage(data, isStatus = false) {
+            const item = document.createElement('div');
+            item.className = 'message-item';
+            
+            if (isStatus) {
+                item.classList.add('status');
+                item.innerHTML = `<span>${data.msg}</span>`;
+            } else {
+                // Если это свое сообщение
+                if (data.user_name === userName) {
+                    item.classList.add('own');
+                }
 
-
-    // --- 1. ЛОГИКА ПРИСОЕДИНЕНИЯ К КОМНАТЕ ---
-    socket.on('connect', function() {
-        console.log('Подключен к SocketIO. Присоединяюсь к комнате:', roomCode);
-        // Отправляем запрос на присоединение к комнате на сервер Flask
-        socket.emit('join', {room: roomCode});
-    });
-
-
-    // --- 2. Логика отображения сообщений ---
-    function addMessage(sender, text, timestamp) {
-        // Если это СИСТЕМНОЕ сообщение
-        if (sender === 'Система') {
-            const systemElement = document.createElement('div');
-            systemElement.classList.add('system-message');
-            systemElement.textContent = text;
-            messagesDiv.appendChild(systemElement);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            return;
+                item.innerHTML = `
+                    <img src="${data.user_pic || 'https://via.placeholder.com/35'}" class="rounded-circle user-pic" alt="Аватар">
+                    <div class="message-body">
+                        <div class="message-content">
+                            ${data.user_name !== userName ? '<strong>' + data.user_name + ':</strong> ' : ''}
+                            ${data.content}
+                        </div>
+                        <div class="message-info">${data.timestamp}</div>
+                    </div>
+                `;
+            }
+            
+            // Добавляем сообщение в начало списка (т.к. flex-direction: column-reverse)
+            messageList.prepend(item);
         }
 
-        // Если это ОБЫЧНОЕ сообщение
-        const messageElement = document.createElement('div');
-        messageElement.classList.add('p-2', 'rounded', 'mb-2');
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const content = input.value.trim();
+            if (content) {
+                socket.emit('send_message', { content: content });
+                input.value = '';
+            }
+        }
+
+        // Обработчик новых сообщений
+        socket.on('new_message', function(data) {
+            insertMessage(data);
+        });
+
+        // Обработчик системных сообщений (вход/выход)
+        socket.on('status_message', function(data) {
+            insertMessage(data, true);
+        });
+
+        // Обработчик соединения
+        socket.on('connect', function() {
+            console.log('Connected to server.');
+        });
         
-        // Форматируем время
-        const time = timestamp || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        // Обработчик ошибки (на всякий случай)
+        socket.on('error', function(err) {
+            console.error('Socket error:', err);
+        });
         
-        if (sender === currentUsername) {
-            // Сообщение ТЕКУЩЕГО пользователя (Справа, синий фон)
-            messageElement.classList.add('bg-primary', 'text-white', 'ms-auto');
-            messageElement.innerHTML = `
-                <p class="mb-0">${text}</p>
-                <small class="text-white-50 float-end">${time}</small>
-            `;
-        } else {
-            // Сообщение ДРУГОГО пользователя (Слева, светлый фон)
-            messageElement.classList.add('bg-light', 'text-dark', 'me-auto');
-            messageElement.innerHTML = `
-                <small class="fw-bold text-primary">${sender}</small>
-                <p class="mb-0">${text}</p>
-                <small class="text-secondary float-end">${time}</small>
-            `;
-        }
-        
-        messagesDiv.appendChild(messageElement);
-        // Прокрутка вниз
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    }
-
-    // --- 3. Логика отправки сообщений (Без изменений) ---
-    sendButton.onclick = function() {
-        sendMessage();
-    };
-
-    messageInput.onkeypress = function(e) {
-        if (e.key === 'Enter') {
-            sendMessage();
-            e.preventDefault();
-        }
-    };
-    
-    function sendMessage() {
-        const message = messageInput.value.trim();
-        if (message) {
-            // !!! НЕТ roomCode в emit, так как сервер знает комнату пользователя !!!
-            socket.emit('message_sent', { message: message }); 
-            messageInput.value = '';
-        }
-    }
-
-    // Обработчик входящих сообщений
-    socket.on('new_message', function(data) {
-        addMessage(data.sender, data.text, data.timestamp);
-    });
-    
-    // --- 4. Логика индикатора печати (Без изменений) ---
-    const typingUsers = new Set();
-    let typingTimer;
-    let isTyping = false;
-    
-    messageInput.addEventListener('input', () => {
-        if (!isTyping) {
-            isTyping = true;
-            socket.emit('typing_start');
-        }
-        
-        clearTimeout(typingTimer);
-        typingTimer = setTimeout(() => {
-            isTyping = false;
-            socket.emit('typing_stop');
-        }, 1500);
-    });
-
-    function updateTypingIndicator() {
-        
-        // Фильтруем пользователей, которые печатают, исключая текущего пользователя
-        const othersTyping = Array.from(typingUsers).filter(user => user !== currentUsername); 
-
-        if (othersTyping.length > 0) {
-            const list = othersTyping.join(', ');
-            typingIndicator.textContent = `${list} печатает...`;
-        } else {
-            typingIndicator.textContent = '';
-        }
-    }
-
-    // Обработчик получения сигнала о печати
-    socket.on('typing_update', function(data) {
-        if (data.is_typing) {
-            typingUsers.add(data.username);
-        } else {
-            typingUsers.delete(data.username);
-        }
-        updateTypingIndicator();
-    });
-
-</script>
+    </script>
 </body>
 </html>
