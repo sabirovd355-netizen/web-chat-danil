@@ -2,49 +2,70 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Выбор комнаты</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Выбор Комнаты Чата</title>
+    <!-- Используем Bootstrap для стиля -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f4f4f9; }
-        .container { background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); width: 300px; text-align: center; }
-        h1 { color: #333; }
-        input[type="text"] { width: 90%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; width: 100%; }
-        button:hover { background-color: #0056b3; }
+        body {
+            background-color: #f0f4f8;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .room-selection-container {
+            max-width: 600px;
+            padding: 40px;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+            text-align: center;
+        }
+        .room-card {
+            border: 1px solid #dee2e6;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+        }
+        .room-card:hover {
+            box-shadow: 0 4px 8px rgba(0, 123, 255, 0.3);
+            transform: translateY(-2px);
+            border-color: #007bff;
+        }
+        .room-link {
+            text-decoration: none;
+            color: inherit;
+            display: block;
+            padding: 15px;
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Добро пожаловать, {{ username }}!</h1>
-        <p>Выберите, что вы хотите сделать:</p>
+    <div class="room-selection-container">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h3 class="m-0">Выберите Комнату</h3>
+            <div class="text-end">
+                <img src="{{ user_pic }}" class="rounded-circle" width="35" height="35" alt="Аватар">
+                <span class="ms-2 me-3">{{ user_name }}</span>
+                <a href="{{ url_for('logout') }}" class="btn btn-danger btn-sm">Выйти</a>
+            </div>
+        </div>
         
-        <form id="joinForm">
-            <input type="text" id="joinCode" placeholder="Введите код комнаты" required>
-            <button type="submit">Присоединиться</button>
-        </form>
+        <p class="text-muted mb-4">Найдите тему, которая вам интересна, и присоединяйтесь к обсуждению!</p>
 
-        <form id="createForm">
-            <input type="text" id="createCode" placeholder="Придумайте код комнаты (например, 'family_chat')" required>
-            <button type="submit">Создать новую</button>
-        </form>
+        <div class="room-list">
+            {% for room in rooms %}
+                <div class="room-card">
+                    <!-- Ссылка ведет на маршрут /chat/НАЗВАНИЕ_КОМНАТЫ -->
+                    <a href="{{ url_for('chat', room_name=room) }}" class="room-link">
+                        <i class="bi bi-chat-left-text me-2"></i> {{ room }}
+                    </a>
+                </div>
+            {% endfor %}
+        </div>
     </div>
-
-    <script>
-        document.getElementById('joinForm').onsubmit = function(event) {
-            event.preventDefault();
-            const code = document.getElementById('joinCode').value.trim();
-            if (code) {
-                window.location.href = '/chat/' + code;
-            }
-        };
-
-        document.getElementById('createForm').onsubmit = function(event) {
-            event.preventDefault();
-            const code = document.getElementById('createCode').value.trim();
-            if (code) {
-                // Создание новой комнаты - это просто переход по ссылке с новым кодом
-                window.location.href = '/chat/' + code;
-            }
-        };
-    </script>
 </body>
 </html>
