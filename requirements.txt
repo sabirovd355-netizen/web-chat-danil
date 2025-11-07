@@ -1,0 +1,7 @@
+Flask
+Flask-SocketIO
+Flask-SQLAlchemy
+requests
+oauthlib
+gunicorn
+psycopg2-binary
