@@ -41,7 +41,7 @@ user_room_map = {}
 
 # --- 2. Модели и База данных ---
 
-class User(UserMixin, db.Model):
+class User(db.Model):
     """Модель пользователя."""
     id = db.Column(db.String(128), primary_key=True) # ID от Google
     name = db.Column(db.String(80), nullable=False)
