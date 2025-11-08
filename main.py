@@ -1,24 +1,25 @@
-import eventlet
-eventlet.monkey_patch() # !!! ОЧЕНЬ ВАЖНО: Асинхронный патч должен быть первым импортом !!!
-
 import os
+# --- КРИТИЧНОЕ ИСПРАВЛЕНИЕ: Eventlet Monkey-Patching ---
+# Этот вызов должен быть выполнен ПЕРЕД ВСЕМИ ОСТАЛЬНЫМИ ИМПОРТАМИ,
+# чтобы обеспечить асинхронную работу Flask-SocketIO с Eventlet (как указано в Procfile).
+import eventlet
+eventlet.monkey_patch()
+# --------------------------------------------------------
+
 import json
 import secrets
 from datetime import datetime, timezone
 
-from flask import Flask, render_template, redirect, url_for, request, session, abort, flash
-# ВАЖНО: 'rooms' теперь не используется в connect
-from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
+from flask import Flask, render_template, redirect, url_for, request, session, flash
+from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect, rooms
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
-
-from oauthlib.oauth2 import WebApplicationClient
-import requests
 
 # --- 1. Конфигурация и Инициализация ---
 app = Flask(__name__)
 
-# !!! ИСПРАВЛЕНИЕ ДЛЯ RAILWAY (HTTPS) !!!
+# ИСПРАВЛЕНИЕ ДЛЯ RAILWAY (HTTPS):
+# Это необходимо, чтобы Flask видел, что запрос пришел по HTTPS и корректно работал с сессиями.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # Устанавливаем секретный ключ для защиты сессий
@@ -30,337 +31,368 @@ if database_url and database_url.startswith("postgres://"):
     # Исправляем формат URL для совместимости с SQLAlchemy и PostgreSQL
     database_url = database_url.replace("postgres://", "postgresql+psycopg2://", 1)
 
+# Используем PostgreSQL URL, если доступен, иначе SQLite для локальной разработки
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'sqlite:///chat.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
-# Используем eventlet для SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# Используем eventlet в качестве движка SocketIO, разрешаем CORS для продакшена.
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*") 
 
-# --- 2. Настройки OAuth (Google) ---
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
-GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
+# Словарь для отслеживания комнаты, в которой находится каждый пользователь (по user_id)
+user_room_map = {} 
 
-client = WebApplicationClient(GOOGLE_CLIENT_ID)
+# Словарь для отслеживания активных пользователей по комнатам для индикатора печати
+typing_users_in_rooms = {} 
 
-# --- 3. Модели Базы Данных ---
+
+# --- 2. Модели Базы Данных ---
+
 class User(db.Model):
     __tablename__ = 'users'
-    id = db.Column(db.String(128), primary_key=True) # ID пользователя Google (sub)
-    name = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(100), unique=True, nullable=False)
-    profile_pic = db.Column(db.String(256))
+    id = db.Column(db.String(36), primary_key=True)  # UUID для user_id
+    google_id = db.Column(db.String(128), unique=True, nullable=True)
+    name = db.Column(db.String(80), nullable=False)
+    # Уникальное имя пользователя в нижнем регистре для проверки уникальности
+    unique_name = db.Column(db.String(80), unique=True, nullable=True) 
+
+    messages = db.relationship('Message', backref='author', lazy=True)
+
+    def __repr__(self):
+        return f'<User {self.name}>'
 
 class Message(db.Model):
     __tablename__ = 'messages'
     id = db.Column(db.Integer, primary_key=True)
-    room_name = db.Column(db.String(100), nullable=False)
-    user_id = db.Column(db.String(128), db.ForeignKey('users.id'), nullable=False)
-    user_name = db.Column(db.String(100), nullable=False)
-    user_pic = db.Column(db.String(256))
-    content = db.Column(db.String(500), nullable=False)
+    room_name = db.Column(db.String(128), nullable=False)
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    # Сохраняем время в UTC
     timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
-        """Возвращает сообщение в виде словаря для отправки через SocketIO."""
-        # Форматирование времени в соответствии с часовым поясом UTC
-        # Если вы хотите локальное время, нужно добавить логику конвертации.
-        # Для простоты оставляем UTC-время в формате ЧЧ:ММ
+        # Преобразование данных сообщения в словарь для отправки по SocketIO
+        # Используем уникальное имя, чтобы оно отображалось в чате
         return {
-            'user_name': self.user_name,
-            'user_pic': self.user_pic,
+            'user_id': self.user_id,
+            'user_name': self.author.unique_name or self.author.name,
             'content': self.content,
-            'timestamp': self.timestamp.strftime('%H:%M'), 
+            # Форматируем время для отображения. Обратите внимание: оно будет в UTC.
+            'timestamp': self.timestamp.strftime('%H:%M:%S'), 
         }
 
-# --- 4. Вспомогательные функции (OAuth) ---
+    def __repr__(self):
+        return f'<Message {self.room_name} from {self.user_id}>'
 
-def get_google_provider_cfg():
-    """Получает конфигурацию Google OpenID Connect."""
-    return requests.get(GOOGLE_DISCOVERY_URL).json()
 
-# --- 5. Маршруты Аутентификации (Flask) ---
+# --- 3. Функции Базы Данных (Удален глобальный вызов setup_database) ---
 
-@app.route("/")
+# Удаляем функцию setup_database() и ее вызов. 
+# Логика db.create_all() переносится в роут login, который всегда имеет контекст.
+# Это гарантирует, что таблицы создадутся при первом взаимодействии с БД.
+
+# Флаг для однократного создания таблиц
+tables_created = False 
+
+def ensure_tables_exist():
+    """Проверяет и создает таблицы БД. Вызывается в первом роуте."""
+    global tables_created
+    if not tables_created:
+        try:
+            # db.create_all() безопасно, т.к. создает только несуществующие таблицы
+            db.create_all() 
+            print("Таблицы базы данных созданы (или уже существовали).")
+            tables_created = True # Устанавливаем флаг, чтобы не вызывать повторно
+        except Exception as e:
+            # Если возникла ошибка, скорее всего, проблема с подключением.
+            print(f"Критическая ошибка при создании таблиц базы данных: {e}")
+
+
+# --- 4. Роуты Flask (Аутентификация и Навигация) ---
+
+@app.route('/')
 def index():
-    """Главная страница: перенаправляет, если пользователь уже вошел."""
-    # Если пользователь авторизован, отправляем его на выбор комнаты
     if 'user_id' in session:
-        return redirect(url_for("room_choice"))
-    # Иначе, показываем страницу входа (требуется шаблон login.html)
-    return render_template("login.html")
+        # Если пользователь аутентифицирован, показываем страницу выбора комнаты
+        return render_template('room_selection.html', user_name=session.get('user_name'))
+    # Иначе - страница входа
+    return render_template('login.html')
 
-@app.route("/google-login")
-def google_login():
-    """Инициирует процесс входа через Google OAuth."""
-    google_provider_cfg = get_google_provider_cfg()
-    authorization_endpoint = google_provider_cfg["authorization_endpoint"]
-
-    # Используем клиент для создания запроса
-    redirect_uri = request.base_url + "/callback"
+@app.route('/login', methods=['POST'])
+def login():
+    # !!! КРИТИЧЕСКИЙ ВЫЗОВ: Гарантируем, что таблицы существуют в контексте HTTP-запроса
+    ensure_tables_exist() 
     
-    # ПРОВЕРКА: Если приложение работает на http, request.base_url будет http://.
-    # Для Railway или других HTTPS-хостов это может вызвать проблему, но ProxyFix
-    # должен исправить request.base_url в большинстве случаев.
+    username = request.form.get('username')
 
-    request_uri = client.prepare_request_uri(
-        authorization_endpoint,
-        redirect_uri=redirect_uri,
-        scope=["openid", "email", "profile"],
-    )
-    return redirect(request_uri)
+    if not username or not username.strip():
+        flash('Имя пользователя не может быть пустым.', 'error')
+        return redirect(url_for('index'))
+    
+    username = username.strip()
 
-@app.route("/google-login/callback")
-def callback():
-    """Обрабатывает ответ от Google и авторизует пользователя."""
-    code = request.args.get("code")
+    # Проверка на длину
+    if len(username) < 3 or len(username) > 30:
+        flash('Имя пользователя должно быть от 3 до 30 символов.', 'error')
+        return redirect(url_for('index'))
+    
+    # Нормализуем имя для поиска в базе данных (всегда в нижнем регистре)
+    unique_name = username.lower()
 
-    google_provider_cfg = get_google_provider_cfg()
-    token_endpoint = google_provider_cfg["token_endpoint"]
+    # Роуты Flask уже находятся в контексте приложения
+    user = User.query.filter_by(unique_name=unique_name).first()
 
-    # Подготавливаем запрос на токен
-    token_url, headers, body = client.prepare_token_request(
-        token_endpoint,
-        authorization_response=request.url,
-        redirect_url=request.base_url,
-        code=code
-    )
-    token_response = requests.post(
-        token_url,
-        headers=headers,
-        data=body,
-        auth=(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET),
-    )
-
-    client.parse_request_body_response(token_response.text)
-
-    # Получаем конечную точку информации о пользователе
-    userinfo_endpoint = google_provider_cfg["userinfo_endpoint"]
-    uri, headers, body = client.add_token(userinfo_endpoint)
-    userinfo_response = requests.get(uri, headers=headers, data=body)
-
-    # Парсим информацию
-    if userinfo_response.json().get("email_verified"):
-        user_data = userinfo_response.json()
-        
-        user_id = user_data["sub"]
-        user_name = user_data["name"]
-        user_email = user_data["email"]
-        user_pic = user_data["picture"]
-
-        # Создаем или обновляем пользователя в БД
-        user = User.query.get(user_id)
-        if not user:
-            user = User(id=user_id, name=user_name, email=user_email, profile_pic=user_pic)
+    if not user:
+        # Создаем нового пользователя
+        user_id = secrets.token_urlsafe(16)
+        # Сохраняем оригинальное имя, но используем уникальное для поиска
+        user = User(id=user_id, name=username, unique_name=unique_name) 
+        try:
             db.session.add(user)
-        else:
-            user.name = user_name
-            user.profile_pic = user_pic
-        
-        db.session.commit()
+            db.session.commit()
+            print(f"Создан новый пользователь: {username}")
+        except Exception as e:
+            db.session.rollback()
+            # Дополнительная проверка на уникальность, хотя unique=True должен это обрабатывать
+            if 'unique_name' in str(e):
+                 flash('Это имя пользователя уже занято. Пожалуйста, выберите другое.', 'error')
+            else:
+                 flash('Произошла ошибка при создании пользователя.', 'error')
+            
+            print(f"Ошибка при создании пользователя: {e}")
+            return redirect(url_for('index'))
+    
+    # Устанавливаем данные сессии
+    session['user_id'] = user.id
+    session['user_name'] = user.name
+    session['unique_name'] = user.unique_name
+    
+    return redirect(url_for('index'))
 
-        # Устанавливаем сессию
-        session['user_id'] = user_id
-        session['user_name'] = user_name
-        session['user_pic'] = user_pic
-        session['user_email'] = user_email # Добавляем почту для logout
-        
-        flash(f"Добро пожаловать, {user_name}!", 'success')
-        return redirect(url_for("room_choice"))
-
-    else:
-        flash("Почта Google не подтверждена или отсутствует.", 'error')
-        return redirect(url_for("index"))
-
-@app.route("/logout")
+@app.route('/logout')
 def logout():
-    """Очищает сессию и перенаправляет на страницу входа."""
-    session.clear()
-    flash("Вы вышли из системы.", 'success')
-    return redirect(url_for("index"))
-
-# --- 6. Маршруты Приложения (Flask) ---
-
-@app.route("/room_choice", methods=["GET", "POST"])
-def room_choice():
-    """Страница выбора комнаты."""
-    if 'user_id' not in session:
-        flash("Пожалуйста, войдите, чтобы продолжить.", 'error')
-        return redirect(url_for("index"))
-
-    room_error = None
-    if request.method == "POST":
-        room_name = request.form.get("room_name", "").strip()
-        if room_name:
-            # Перенаправляем на страницу чата с выбранным именем комнаты
-            return redirect(url_for("chat", room_name=room_name))
-        else:
-            room_error = "Имя комнаты не может быть пустым."
-            
-    # Переменные для шаблона room_choice.html
-    user_name = session.get('user_name', 'Гость')
-    user_email = session.get('user_email', 'неизвестно')
-    
-    # Заглушки для популярных комнат
-    popular_rooms = [
-        "Общий Флуд", 
-        "Кодеры", 
-        "Игры и Развлечения", 
-        "Flask-SocketIO",
-        "Спорт"
-    ]
-            
-    return render_template("room_choice.html", 
-                           popular_rooms=popular_rooms, 
-                           room_error=room_error,
-                           user_name=user_name,
-                           user_email=user_email)
-
-@app.route("/chat/<room_name>")
-def chat(room_name):
-    """Страница чата для конкретной комнаты."""
-    if 'user_id' not in session:
-        flash("Пожалуйста, войдите, чтобы продолжить.", 'error')
-        return redirect(url_for("index"))
-
-    # Нормализация имени комнаты
-    room_name = room_name.strip()
-    if not room_name:
-        flash("Недопустимое имя комнаты.", 'error')
-        return redirect(url_for("room_choice"))
-    
-    user_name = session.get('user_name')
-    user_pic = session.get('user_pic')
-
-    # Загружаем последние 50 сообщений для этой комнаты
-    history_messages = Message.query.filter_by(room_name=room_name) \
-                                   .order_by(Message.timestamp.desc()) \
-                                   .limit(50) \
-                                   .all()
-    # Разворачиваем список, чтобы старые сообщения были в начале
-    history_messages.reverse()
-    
-    # Преобразуем объекты в словари для шаблона
-    messages_data = [msg.to_dict() for msg in history_messages]
-
-    return render_template("chat.html", 
-                           room_name=room_name,
-                           user_name=user_name,
-                           user_pic=user_pic,
-                           messages=messages_data)
-
-# --- 7. Структура SocketIO ---
-
-# Карта для отслеживания, в какой комнате находится каждый пользователь (sid -> room_name)
-# Используем sid, так как это уникально для каждого SocketIO-соединения
-sid_room_map = {} 
-
-@socketio.on('connect')
-def handle_connect():
-    """Обрабатывает подключение нового клиента (только проверка авторизации)."""
+    # Проверяем, находится ли пользователь в комнате
     user_id = session.get("user_id")
-    # Проверяем, авторизован ли пользователь в Flask-сессии
-    if not user_id:
-        print("Неавторизованный клиент попытался подключиться.")
-        disconnect()
+    if user_id in user_room_map:
+        pass 
+    
+    # Очищаем сессию
+    session.pop('user_id', None)
+    session.pop('user_name', None)
+    session.pop('unique_name', None)
+    flash('Вы вышли из системы.', 'success')
+    return redirect(url_for('index'))
+
+@app.route('/join', methods=['POST'])
+def handle_join_request():
+    if 'user_id' not in session:
+        flash('Сначала войдите в систему.', 'error')
+        return redirect(url_for('index'))
+
+    room_name = request.form.get('room_name')
+
+    if not room_name or not room_name.strip():
+        flash('Имя комнаты не может быть пустым.', 'error')
+        return redirect(url_for('index'))
+    
+    room_name = room_name.strip()
+    
+    if len(room_name) > 50:
+        flash('Имя комнаты слишком длинное.', 'error')
+        return redirect(url_for('index'))
+
+    # Редирект на роут комнаты, который отобразит шаблон
+    return redirect(url_for('chat_room', room_name=room_name))
+
+@app.route('/chat/<room_name>')
+def chat_room(room_name):
+    if 'user_id' not in session:
+        flash('Сначала войдите в систему.', 'error')
+        return redirect(url_for('index'))
+
+    if not room_name:
+        return redirect(url_for('index'))
+
+    # Теперь просто отображаем шаблон, логика присоединения будет в SocketIO
+    return render_template(
+        'chat.html', 
+        room_name=room_name, 
+        user_id=session['user_id']
+    )
+
+
+# --- 5. SocketIO Обработчики ---
+
+@socketio.on('join')
+def on_join(data):
+    """Обрабатывает присоединение пользователя к комнате."""
+    user_id = session.get("user_id")
+    user_name = session.get("user_name")
+    room_name = data.get('room')
+
+    if not all([user_id, user_name, room_name]):
+        emit('error_message', {'msg': 'Не удалось присоединиться к комнате: отсутствует ID или имя.'})
         return
 
-    # Если авторизован, ждем, пока клиент отправит событие 'join_room'
-    print(f'Пользователь {session["user_name"]} (SID: {request.sid}) подключен.')
-
-@socketio.on('join_room')
-def handle_join_room(data):
-    """Явно присоединяет клиента к комнате."""
-    user_id = session.get("user_id")
-    room_name = data.get('room')
-    
-    if not all([user_id, room_name]):
-        return 
-
-    # 1. Если пользователь уже в другой комнате, выходим из нее
-    current_sid = request.sid
-    if current_sid in sid_room_map:
-        old_room = sid_room_map[current_sid]
-        if old_room != room_name:
-            leave_room(old_room)
-            print(f'{session["user_name"]} покинул комнату {old_room}.')
-
-    # 2. Присоединяемся к новой комнате
+    # 1. Если пользователь уже в другой комнате, заставляем его покинуть старую
+    if user_id in user_room_map and user_room_map[user_id] != room_name:
+        old_room = user_room_map[user_id]
+        leave_room(old_room)
+        # Сообщаем старой комнате об уходе
+        emit('status_message', 
+             {'msg': f'{user_name} покинул комнату.'}, 
+             room=old_room)
+        
+    # 2. Присоединяем к новой комнате
     join_room(room_name)
-    sid_room_map[current_sid] = room_name
-
-    # 3. Сообщаем всем, что пользователь присоединился
-    emit('status_message', 
-          {'msg': f'{session["user_name"]} присоединился к комнате {room_name}.'}, 
-          room=room_name)
+    user_room_map[user_id] = room_name # Обновляем карту комнат
     
-    print(f'Пользователь {session["user_name"]} (SID: {current_sid}) присоединен к комнате {room_name}.')
+    # 3. Сообщаем комнате о присоединении нового пользователя
+    emit('status_message', 
+         {'msg': f'{user_name} присоединился к комнате.'}, 
+         room=room_name, 
+         include_self=False) # Не отправляем сообщение самому себе
+
+    print(f'Пользователь {user_name} (ID: {user_id[:4]}...) присоединился к комнате {room_name}.')
+    
+    # 4. Загрузка и отправка истории сообщений
+    with app.app_context():
+        # Загружаем последние 50 сообщений. SocketIO обработчики требуют контекста для работы с БД!
+        messages = Message.query.filter_by(room_name=room_name).order_by(Message.timestamp.desc()).limit(50).all()
+        # Разворачиваем список, чтобы сообщения были в хронологическом порядке (сначала старые)
+        messages.reverse() 
+        
+        history = [msg.to_dict() for msg in messages]
+        
+        # Отправляем историю ТОЛЬКО присоединившемуся пользователю
+        emit('message_history', {'history': history, 'user_name': user_name})
 
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Обрабатывает отключение пользователя."""
     user_id = session.get("user_id")
-    current_sid = request.sid
+    user_name = session.get("user_name")
     
-    if current_sid in sid_room_map:
-        room_name = sid_room_map.pop(current_sid)
+    if user_id in user_room_map:
+        room_name = user_room_map.pop(user_id)
+        
+        # Удаляем пользователя из индикатора печати
+        if room_name in typing_users_in_rooms and user_id in typing_users_in_rooms[room_name]:
+            typing_users_in_rooms[room_name].pop(user_id, None)
+            # Оповещаем комнату о прекращении печати (если он печатал)
+            emit('typing_status', 
+                 {'user_id': user_id, 'user_name': user_name, 'is_typing': False}, 
+                 room=room_name, include_self=False)
         
         # Сообщаем всем, что пользователь отключился
         emit('status_message', 
-              {'msg': f'{session["user_name"]} покинул комнату {room_name}.'}, 
-              room=room_name)
+             {'msg': f'{user_name} покинул комнату {room_name}.'}, 
+             room=room_name)
         
-        print(f'Пользователь {session["user_name"]} отключен от комнаты {room_name}.')
+        print(f'Пользователь {user_name} отключен от комнаты {room_name}.')
 
 @socketio.on('send_message')
 def handle_message(data):
     """Обрабатывает отправку нового сообщения."""
     user_id = session.get("user_id")
-    current_sid = request.sid
-    room_name = sid_room_map.get(current_sid)
+    room_name = user_room_map.get(user_id)
+    user_name = session.get("user_name")
     content = data.get('content', '').strip()
 
-    if not all([user_id, room_name, content]):
-        return # Игнорируем неполные или пустые сообщения
+    if not all([user_id, room_name, content, user_name]):
+        # Отправляем ошибку только отправителю
+        emit('error_message', {'msg': 'Сообщение пустое или произошла ошибка сессии.'})
+        return 
 
     if len(content) > 500: # Ограничение на размер сообщения
+        # Отправляем ошибку только отправителю
+        emit('error_message', {'msg': 'Сообщение превышает лимит в 500 символов.'})
+        # Обрезаем контент перед сохранением
         content = content[:500] 
 
     # 1. Сохраняем сообщение в базу данных
-    user = User.query.get(user_id)
-    if not user:
+    with app.app_context():
+        # Операции с БД должны быть внутри контекста приложения!
+        user = User.query.get(user_id)
+        if not user:
+            emit('error_message', {'msg': 'Пользователь не найден в базе данных.'})
+            return
+
+        new_message = Message(
+            room_name=room_name,
+            user_id=user_id,
+            content=content
+        )
+        try:
+            db.session.add(new_message)
+            db.session.commit()
+            
+            # 2. Отправляем сообщение всем в комнате
+            message_data = new_message.to_dict()
+            socketio.emit('new_message', message_data, room=room_name)
+
+            print(f'Сообщение в {room_name} от {user_name}: {content[:30]}...')
+            
+        except Exception as e:
+            db.session.rollback()
+            print(f"Ошибка базы данных при сохранении сообщения: {e}")
+            emit('error_message', {'msg': 'Ошибка сервера при сохранении сообщения.'})
+            return
+
+
+# --- SocketIO: Индикатор Печати ---
+
+@socketio.on('start_typing')
+def handle_start_typing():
+    """Обрабатывает начало печати."""
+    user_id = session.get("user_id")
+    user_name = session.get("user_name")
+    room_name = user_room_map.get(user_id)
+    
+    if not all([user_id, room_name]):
         return
 
-    new_message = Message(
-        room_name=room_name,
-        user_id=user.id,
-        user_name=user.name,
-        user_pic=user.profile_pic,
-        content=content
-    )
-    db.session.add(new_message)
-    db.session.commit()
+    # Добавляем пользователя в список печатающих
+    if room_name not in typing_users_in_rooms:
+        typing_users_in_rooms[room_name] = {}
+        
+    # Используем user_id в качестве ключа, user_name в качестве значения
+    typing_users_in_rooms[room_name][user_id] = user_name
+    
+    # Отправляем статус печати ВСЕМ, кроме отправителя
+    emit('typing_status', 
+         {'user_id': user_id, 'user_name': user_name, 'is_typing': True}, 
+         room=room_name, include_self=False)
 
-    # 2. Отправляем сообщение всем в комнате
-    message_data = new_message.to_dict()
-    emit('new_message', message_data, room=room_name)
-    print(f'Сообщение в комнате {room_name} от {user.name}: {content}')
+@socketio.on('stop_typing')
+def handle_stop_typing():
+    """Обрабатывает прекращение печати."""
+    user_id = session.get("user_id")
+    room_name = user_room_map.get(user_id)
+    
+    if not all([user_id, room_name]):
+        return
+        
+    # Удаляем пользователя из списка печатающих
+    if room_name in typing_users_in_rooms and user_id in typing_users_in_rooms[room_name]:
+        typing_users_in_rooms[room_name].pop(user_id, None)
+    
+    # Отправляем статус печати ВСЕМ, кроме отправителя (чтобы они обновили UI)
+    emit('typing_status', 
+         {'user_id': user_id, 'user_name': session['user_name'], 'is_typing': False}, 
+         room=room_name, include_self=False)
 
 
-# --- 8. Инициализация БД ---
-
-with app.app_context():
-    # Создаем таблицы, если они еще не существуют
-    try:
-        db.create_all()
-        print("Проверка/создание таблиц базы данных завершена.")
-    except Exception as e:
-        print(f"Ошибка при создании таблиц базы данных: {e}")
-
-# --- 9. Запуск Приложения ---
-
-# Запуск приложения через gunicorn / eventlet (как указано в Procfile)
-# if __name__ == '__main__':
-#     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+# --- 6. Запуск приложения ---
+if __name__ == '__main__':
+    # Если запускается локально (через python main.py), инициализируем таблицы здесь
+    with app.app_context():
+        try:
+            db.create_all()
+            print("Локальная инициализация базы данных завершена.")
+        except Exception as e:
+            print(f"Ошибка локальной инициализации базы данных: {e}")
+            
+    # Используем socketio.run, который запускает Eventlet
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
