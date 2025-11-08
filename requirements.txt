@@ -6,5 +6,5 @@ requests
 oauthlib
 gunicorn
 eventlet
-psycopg2-binary
 werkzeug
+psycopg2-binary
