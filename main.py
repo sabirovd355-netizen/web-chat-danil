@@ -1,34 +1,25 @@
 import os
-# --- КРИТИЧНОЕ ИСПРАВЛЕНИЕ: Eventlet Monkey-Patching ---
-# Этот вызов должен быть выполнен ПЕРЕД ВСЕМИ ОСТАЛЬНЫМИ ИМПОРТАМИ.
-import eventlet
-eventlet.monkey_patch()
-# --------------------------------------------------------
-
 import secrets
 from datetime import datetime, timezone
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase # Импортируем DeclarativeBase для чистоты кода
+from sqlalchemy.orm import DeclarativeBase 
+import eventlet
+# eventlet monkey-patching должно идти ДО ЛЮБЫХ других импортов,
+# использующих стандартные блокирующие функции (например, socket).
+eventlet.monkey_patch() 
 
 from flask import Flask, render_template, redirect, url_for, request, session, flash
 from flask_socketio import SocketIO, emit, join_room, leave_room, rooms
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-# --- 1. Глобальные, НЕПРИВЯЗАННЫЕ объекты (для фабрики) ---
+# --- Глобальные, НЕПРИВЯЗАННЫЕ объекты (для фабрики) ---
 # SQLAlchemy и SocketIO инициализируются без привязки к приложению.
-# Это необходимо, чтобы избежать ошибки контекста при импорте.
 db = SQLAlchemy() 
 socketio = SocketIO(cors_allowed_origins="*") 
 
-# Глобальные словари для отслеживания состояния 
-user_room_map = {} 
-typing_users_in_rooms = {} 
+# --- ФАБРИЧНАЯ ФУНКЦИЯ ДЛЯ СОЗДАНИЯ ПРИЛОЖЕНИЯ (ОСНОВА) ---
 
-
-# --- 2. ФАБРИЧНАЯ ФУНКЦИЯ ДЛЯ СОЗДАНИЯ ПРИЛОЖЕНИЯ (ОСНОВА) ---
-
-def create_app(test_config=None):
+def create_app():
     """
     Фабричная функция для создания и настройки приложения Flask. 
     Все компоненты, включая модели, инициализируются внутри.
@@ -51,21 +42,19 @@ def create_app(test_config=None):
     db.init_app(app)
     socketio.init_app(app, async_mode='eventlet')
     
-    # --- 3. МОДЕЛИ ПЕРЕЕЗЖАЮТ ВНУТРЬ ФАБРИКИ (КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ) ---
-    # Это гарантирует, что модели определяются ТОЛЬКО после того, как db.init_app(app) был вызван.
+    # --- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ЧАТА (ВНУТРИ ФАБРИКИ) ---
+    # Переносим сюда, чтобы они были доступны только после инициализации
+    user_room_map = {} 
+    typing_users_in_rooms = {} 
     
-    # SQLAlchemy Model Base (необязательно, но полезно для современных версий)
+    # --- МОДЕЛИ (ВНУТРИ ФАБРИКИ) ---
+    
     class Base(DeclarativeBase):
         pass
     
-    # Убедимся, что db использует Base, если это необходимо.
-    # В Flask-SQLAlchemy это обрабатывается автоматически, но для ясности:
-    # db.Model - это уже правильная база.
-
     class User(db.Model):
         __tablename__ = 'users'
         id = db.Column(db.String(36), primary_key=True)
-        google_id = db.Column(db.String(128), unique=True, nullable=True)
         name = db.Column(db.String(80), nullable=False)
         unique_name = db.Column(db.String(80), unique=True, nullable=True) 
 
@@ -83,36 +72,36 @@ def create_app(test_config=None):
         timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
         def to_dict(self):
-            # Внимание: здесь мы используем `db` и `User`, которые определены в фабрике. 
-            # Поскольку мы находимся в одном потоке создания, это безопасно.
+            # Проверяем наличие автора, чтобы избежать ошибки при удалении пользователя
+            author_name = self.author.unique_name if self.author and self.author.unique_name else 'Неизвестный'
             return {
                 'user_id': self.user_id,
-                'user_name': self.author.unique_name or self.author.name if self.author else 'Неизвестный',
+                'user_name': author_name,
                 'content': self.content,
                 'timestamp': self.timestamp.strftime('%H:%M:%S'), 
             }
     
-    # --- 4. Регистрация Обработчиков БД и Роутов ---
+    # --- Регистрация Обработчиков БД и Роутов ---
 
     @app.before_request
     def ensure_tables_exist():
         if not hasattr(app, 'tables_created') or not app.tables_created:
             with app.app_context():
                 try:
-                    # Создание таблиц
                     db.create_all() 
                     print("Таблицы базы данных созданы (или уже существовали).")
                     app.tables_created = True
                 except Exception as e:
                     print(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать таблицы БД: {e}")
-                    # В случае ошибки продолжим работу, чтобы не блокировать приложение
                     pass
     
     # --- Роуты Flask ---
     @app.route('/')
     def index():
         if 'user_id' in session:
+            # Перенаправляем на новое имя шаблона
             return render_template('room_selection.html', user_name=session.get('user_name'))
+        # Используем обновленный шаблон login.html
         return render_template('login.html')
 
     @app.route('/login', methods=['POST'])
@@ -123,7 +112,6 @@ def create_app(test_config=None):
             return redirect(url_for('index'))
         
         unique_name = username.lower()
-        # Модели доступны здесь, так как они определены внутри create_app
         user = User.query.filter_by(unique_name=unique_name).first()
 
         if not user:
@@ -141,30 +129,48 @@ def create_app(test_config=None):
         session['user_name'] = user.name
         session['unique_name'] = user.unique_name
         
+        # Перенаправляем на выбор комнаты
         return redirect(url_for('index'))
 
     @app.route('/logout')
     def logout():
+        # НЕ ВЫЗЫВАЙТЕ socketio.disconnect() в HTTP-роуте, это вызовет ошибку.
+        # Просто очищаем сессию. Сокет сам обработает отключение.
+        if 'user_id' in session and session['user_id'] in user_room_map:
+            # Пытаемся удалить пользователя из карты, чтобы избежать "мертвых" записей
+            user_room_map.pop(session['user_id'], None)
+
         session.pop('user_id', None)
         session.pop('user_name', None)
         session.pop('unique_name', None)
         flash('Вы вышли из системы.', 'success')
         return redirect(url_for('index'))
 
-    @app.route('/join', methods=['POST'])
-    def handle_join_request():
+    # Роут для выбора комнаты (если пользователь уже вошел)
+    @app.route('/room_selection', methods=['GET', 'POST'])
+    def room_selection():
         if 'user_id' not in session:
             flash('Сначала войдите в систему.', 'error')
             return redirect(url_for('index'))
-
-        room_name = request.form.get('room_name', '').strip()
-
-        if not room_name or len(room_name) > 50:
-            flash('Имя комнаты не может быть пустым или слишком длинным.', 'error')
-            return redirect(url_for('index'))
         
-        return redirect(url_for('chat_room', room_name=room_name))
+        if request.method == 'POST':
+            room_name = request.form.get('room_name', '').strip()
 
+            if not room_name or len(room_name) > 50:
+                flash('Имя комнаты не может быть пустым или слишком длинным.', 'error')
+                return redirect(url_for('room_selection'))
+            
+            # Перенаправляем в комнату
+            return redirect(url_for('chat_room', room_name=room_name))
+
+        # При GET-запросе показываем шаблон выбора
+        return render_template(
+            'room_selection.html', 
+            user_name=session.get('user_name'),
+            popular_rooms=['General', 'Development', 'Random']
+        )
+    
+    # Роут для отображения чат-комнаты
     @app.route('/chat/<room_name>')
     def chat_room(room_name):
         if 'user_id' not in session:
@@ -177,20 +183,9 @@ def create_app(test_config=None):
             user_id=session['user_id']
         )
     
-    # --- 5. Регистрация SocketIO обработчиков ---
-    register_socketio_events(socketio, app, User, Message)
-    
-    return app
+    # --- SocketIO обработчики (ВНУТРИ ФАБРИКИ) ---
 
-
-# --- 6. Отдельная функция для регистрации SocketIO событий ---
-# Теперь она принимает классы моделей в качестве аргументов!
-def register_socketio_events(socketio_instance, app_instance, User_Model, Message_Model):
-    """
-    Регистрирует все обработчики SocketIO.
-    """
-    
-    @socketio_instance.on('join')
+    @socketio.on('join')
     def on_join(data):
         user_id = session.get("user_id")
         user_name = session.get("user_name")
@@ -200,44 +195,50 @@ def register_socketio_events(socketio_instance, app_instance, User_Model, Messag
             emit('error_message', {'msg': 'Не удалось присоединиться к комнате.'})
             return
 
-        # ... (логика присоединения/покидания комнаты) ...
+        # 1. Сначала выходим из старой комнаты, если она была
         if user_id in user_room_map and user_room_map[user_id] != room_name:
             old_room = user_room_map[user_id]
             leave_room(old_room)
+            # Отправляем сообщение об уходе в старую комнату
             emit('status_message', {'msg': f'{user_name} покинул комнату.'}, room=old_room)
             
+        # 2. Присоединяемся к новой комнате
         join_room(room_name)
         user_room_map[user_id] = room_name 
         
+        # 3. Отправляем сообщение о присоединении всем, кроме себя
         emit('status_message', 
              {'msg': f'{user_name} присоединился к комнате.'}, 
              room=room_name, include_self=False) 
 
-        # Загрузка истории сообщений (используем Message_Model)
-        with app_instance.app_context():
+        # 4. Загрузка истории сообщений (Теперь модели ДОСТУПНЫ)
+        with app.app_context():
             # Загружаем последние 50 сообщений
-            messages = Message_Model.query.filter_by(room_name=room_name).order_by(Message_Model.timestamp.desc()).limit(50).all()
+            messages = Message.query.filter_by(room_name=room_name).order_by(Message.timestamp.desc()).limit(50).all()
             messages.reverse() 
             history = [msg.to_dict() for msg in messages]
             emit('message_history', {'history': history, 'user_name': user_name})
 
-    @socketio_instance.on('disconnect')
+    @socketio.on('disconnect')
     def handle_disconnect():
         user_id = session.get("user_id")
         user_name = session.get("user_name")
         
+        # Обработка состояния отключения и удаления из карты
         if user_id in user_room_map:
             room_name = user_room_map.pop(user_id)
             
+            # Удаляем пользователя из индикаторов печати
             if room_name in typing_users_in_rooms and user_id in typing_users_in_rooms[room_name]:
                 typing_users_in_rooms[room_name].pop(user_id, None)
                 emit('typing_status', 
                      {'user_id': user_id, 'user_name': user_name, 'is_typing': False}, 
                      room=room_name, include_self=False)
             
+            # Сообщаем всем, что пользователь покинул комнату
             emit('status_message', {'msg': f'{user_name} покинул комнату {room_name}.'}, room=room_name)
 
-    @socketio_instance.on('send_message')
+    @socketio.on('send_message')
     def handle_message(data):
         user_id = session.get("user_id")
         room_name = user_room_map.get(user_id)
@@ -247,26 +248,25 @@ def register_socketio_events(socketio_instance, app_instance, User_Model, Messag
         if not all([user_id, room_name, content, user_name]) or len(content) > 500:
             return 
 
-        with app_instance.app_context():
-            # Используем User_Model
-            user = User_Model.query.get(user_id)
+        with app.app_context():
+            # Теперь User и Message определены и доступны
+            user = User.query.get(user_id)
             if not user:
                 return
 
-            # Используем Message_Model
-            new_message = Message_Model(room_name=room_name, user_id=user_id, content=content)
+            new_message = Message(room_name=room_name, user_id=user_id, content=content)
             try:
                 db.session.add(new_message)
                 db.session.commit()
                 message_data = new_message.to_dict()
-                socketio_instance.emit('new_message', message_data, room=room_name)
+                socketio.emit('new_message', message_data, room=room_name)
             except Exception as e:
                 db.session.rollback()
                 print(f"Ошибка базы данных при сохранении сообщения: {e}")
                 emit('error_message', {'msg': 'Ошибка сервера при сохранении сообщения.'})
     
-    # ... (логика индикаторов печати, без запросов к БД)
-    @socketio_instance.on('start_typing')
+    # ... (логика индикаторов печати)
+    @socketio.on('start_typing')
     def handle_start_typing():
         user_id = session.get("user_id")
         user_name = session.get("user_name")
@@ -281,7 +281,7 @@ def register_socketio_events(socketio_instance, app_instance, User_Model, Messag
              {'user_id': user_id, 'user_name': user_name, 'is_typing': True}, 
              room=room_name, include_self=False)
 
-    @socketio_instance.on('stop_typing')
+    @socketio.on('stop_typing')
     def handle_stop_typing():
         user_id = session.get("user_id")
         room_name = user_room_map.get(user_id)
@@ -296,7 +296,10 @@ def register_socketio_events(socketio_instance, app_instance, User_Model, Messag
              room=room_name, include_self=False)
 
 
-# --- 7. Запуск приложения ---
+    return app
+
+
+# --- Запуск приложения ---
 
 # Gunicorn импортирует ЭТУ переменную 'app'
 app = create_app()

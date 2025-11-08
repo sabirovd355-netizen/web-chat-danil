@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Выбор Комнаты{% endblock %}
+
+{% block content %}
+
+<div class="flex flex-col items-center justify-center min-h-[calc(100vh-6rem)] py-8 px-4 sm:px-6 lg:px-8 bg-gray-50">
+<div class="w-full max-w-lg space-y-8 p-10 bg-white shadow-xl rounded-2xl border border-gray-100">
+<!-- Заголовок -->
+<div class="text-center">
+<h1 class="text-3xl font-extrabold text-gray-900 mb-2">Привет, {{ user_name or "Пользователь" }}!</h1>
+<p class="text-gray-600">Выберите существующую комнату или создайте новую.</p>
+</div>
+
+    <!-- Форма для создания/входа в комнату -->
+    <form class="space-y-6" method="POST" action="{{ url_for('room_selection') }}">
+        <div class="rounded-md shadow-sm">
+            <div>
+                <label for="room_name" class="sr-only">Имя Комнаты</label>
+                <input id="room_name" name="room_name" type="text" autocomplete="off" required
+                       class="appearance-none relative block w-full px-4 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-lg"
+                       placeholder="Введите или создайте имя комнаты (например, PythonDev)">
+            </div>
+        </div>
+
+        <div>
+            <button type="submit"
+                    class="group relative w-full flex justify-center py-3 px-4 border border-transparent text-lg font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out shadow-md transform hover:scale-[1.01] active:scale-[0.99]">
+                Войти в Комнату
+            </button>
+        </div>
+    </form>
+
+    <!-- Список популярных комнат -->
+    <div class="pt-4 border-t border-gray-200">
+        <h2 class="text-xl font-semibold text-gray-800 mb-3">Популярные комнаты:</h2>
+        <div class="grid grid-cols-2 gap-3">
+            <!-- Используем роут chat_room для перехода -->
+            {% for room in popular_rooms %}
+            <a href="{{ url_for('chat_room', room_name=room) }}"
+               class="flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-full text-gray-700 bg-gray-100 hover:bg-indigo-100 hover:text-indigo-700 transition duration-150 ease-in-out shadow-sm text-center">
+                #{{ room }}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <!-- Кнопка выхода -->
+    <a href="{{ url_for('logout') }}" class="logout-link block mt-4 text-red-500 hover:text-red-700 transition duration-150 text-base font-medium">
+        Выйти из аккаунта
+    </a>
+</div>
+
+
+</div>
+{% endblock %}
