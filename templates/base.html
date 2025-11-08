@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Flask Чат{% endblock %}</title>
+    <!-- Подключение Tailwind CSS через CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Применяем шрифт Inter ко всему приложению */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb; /* Светлый фон */
+        }
+    </style>
+</head>
+<body class="antialiased min-h-screen">
+    <!-- Блок для основного контента страницы -->
+    <div class="container mx-auto">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
