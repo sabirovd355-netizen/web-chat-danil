@@ -2,7 +2,9 @@ Flask
 Flask-SocketIO
 Flask-SQLAlchemy
 Flask-Migrate
+requests
+oauthlib
 gunicorn
 eventlet
 psycopg2-binary
-werkzeugх
+werkzeug
