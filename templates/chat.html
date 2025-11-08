@@ -1,261 +1,343 @@
-{% extends "base.html" %}
-
-{% block title %}Чат: {{ room_name }}{% endblock %}
-
-{% block content %}
-<!-- Подключение Socket.IO клиента -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
-<!-- Подключение Tailwind CSS -->
-<script src="https://cdn.tailwindcss.com"></script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-<style>
-    /* Используем шрифт Inter для современного вида */
-    body {
-        font-family: 'Inter', sans-serif;
-        background-color: #f0f4f8; /* Легкий голубовато-серый фон */
-    }
-    .chat-container {
-        height: 100vh;
-        max-width: 1000px;
-        margin: 0 auto;
-        display: flex;
-        flex-direction: column;
-        background-color: white;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-    }
-    .message-area {
-        flex-grow: 1;
-        overflow-y: auto;
-        padding: 1rem;
-        scroll-behavior: smooth;
-    }
-    /* Стили для системных сообщений (вход/выход) */
-    .status-message {
-        text-align: center;
-        font-size: 0.85rem;
-        color: #6b7280;
-        padding: 0.5rem 0;
-        margin: 0.5rem 0;
-    }
-    
-    /* Стили для сообщений, отправленных текущим пользователем */
-    .user-message-container {
-        display: flex;
-        justify-content: flex-end;
-    }
-    .user-message {
-        background-color: #1e40af; /* Синий-700 */
-        color: white;
-        border-radius: 12px 12px 2px 12px;
-        padding: 10px 14px;
-        max-width: 80%;
-        margin-bottom: 15px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        word-wrap: break-word; /* Обеспечиваем перенос длинных слов */
-        line-height: 1.4;
-    }
-    
-    /* Стили для сообщений других пользователей */
-    .other-message-container {
-        display: flex;
-        justify-content: flex-start;
-    }
-    .other-message {
-        background-color: #f3f4f6; /* Серый-100 */
-        color: #1f2937; /* Серый-800 */
-        border-radius: 12px 12px 12px 2px;
-        padding: 10px 14px;
-        max-width: 80%;
-        margin-bottom: 15px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-        word-wrap: break-word;
-        line-height: 1.4;
-    }
-
-    .message-timestamp {
-        font-size: 0.65rem;
-        margin-top: 5px;
-        opacity: 0.7;
-    }
-</style>
-
-<div class="chat-container">
-    <!-- Заголовок чата -->
-    <header class="bg-white border-b border-gray-200 p-4 shadow-md flex justify-between items-center sticky top-0 z-10">
-        <div class="flex items-center space-x-3">
-            <a href="{{ url_for('room_choice') }}" class="text-gray-500 hover:text-indigo-600 transition duration-150" title="Вернуться к выбору комнаты">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5m0 0l5-5m-5 5h12"></path></svg>
-            </a>
-            <h2 class="text-xl font-bold text-gray-800">Комната: <span class="text-indigo-600">{{ room_name }}</span></h2>
-        </div>
-        <div class="flex items-center space-x-3">
-            <!-- Отображение текущего пользователя (предполагаем, что user_pic и user_name доступны) -->
-            <div class="flex items-center space-x-2">
-                <span class="text-sm font-medium text-gray-700 hidden sm:inline">{{ user_name }}</span>
-                <img src="{{ user_pic }}" alt="{{ user_name }}" class="w-8 h-8 rounded-full border-2 border-indigo-500" title="{{ user_name }}">
-            </div>
-            
-            <a href="{{ url_for('logout') }}" class="text-sm text-red-500 hover:text-red-700 font-medium transition duration-150">Выход</a>
-        </div>
-    </header>
-
-    <!-- Область сообщений -->
-    <div id="messages" class="message-area">
-        <!-- Исторические сообщения (отрендеренные Flask) -->
-        {% for message in messages %}
-            {% set is_my_message = message.user_name == user_name %}
-            <div class="{% if is_my_message %}user-message-container{% else %}other-message-container{% endif %}">
-                
-                {% if not is_my_message %}
-                    <!-- Аватар для сообщений других пользователей -->
-                    <div class="w-8 h-8 rounded-full overflow-hidden mr-3 mt-1 self-start hidden sm:block">
-                        <img src="{{ message.user_pic }}" alt="{{ message.user_name }}" class="w-full h-full object-cover">
-                    </div>
-                {% endif %}
-                
-                <div class="max-w-full">
-                    <div class="text-xs {% if is_my_message %}text-gray-500 text-right{% else %}text-gray-600 text-left{% endif %} mb-0.5">
-                        <!-- Отображаем имя только для чужих сообщений или если это ваше сообщение и нет аватара -->
-                        {% if not is_my_message or is_my_message and not is_my_message %}
-                            <span class="font-semibold">{{ message.user_name }}</span>
-                        {% endif %}
-                    </div>
-                    <div class="{% if is_my_message %}user-message{% else %}other-message{% endif %}">
-                        <p class="whitespace-pre-wrap">{{ message.content }}</p>
-                        <span class="message-timestamp block {% if is_my_message %}text-right text-indigo-100{% else %}text-left text-gray-500{% endif %}">
-                            {{ message.timestamp }}
-                        </span>
-                    </div>
-                </div>
-            </div>
-        {% endfor %}
-    </div>
-
-    <!-- Форма отправки сообщения -->
-    <div class="p-4 border-t border-gray-200 bg-white sticky bottom-0 z-10">
-        <form id="send-message-form" class="flex space-x-3">
-            <input type="text" id="message-input" placeholder="Введите сообщение..." required autocomplete="off"
-                   class="flex-grow px-4 py-3 border border-gray-300 rounded-full focus:ring-indigo-500 focus:border-indigo-500 shadow-inner transition duration-150"
-                   maxlength="500">
-            <button type="submit" id="send-button"
-                    class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-full transition duration-200 shadow-lg transform hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center disabled:opacity-50"
-                    title="Отправить сообщение">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
-            </button>
-        </form>
-    </div>
-</div>
-
-<script>
-    // Инициализация Socket.IO
-    const socket = io();
-    const messagesDiv = document.getElementById('messages');
-    const form = document.getElementById('send-message-form');
-    const input = document.getElementById('message-input');
-    const currentUserName = "{{ user_name }}"; // Имя текущего пользователя для определения стиля сообщения
-    const currentUserPic = "{{ user_pic }}"; // Аватар текущего пользователя
-    
-    // --- Вспомогательные функции ---
-
-    // Функция для прокрутки области сообщений вниз
-    function scrollToBottom() {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    }
-
-    // Автоматическая прокрутка при полной загрузке страницы
-    document.addEventListener('DOMContentLoaded', () => {
-        scrollToBottom();
-    });
-
-    // Функция для форматирования времени (если нужно) - пока используем то, что приходит с сервера
-    function formatTime(timestamp) {
-        // Здесь можно было бы добавить логику для клиента, 
-        // но пока полагаемся на серверный формат
-        return timestamp; 
-    }
-
-    // Функция для добавления нового сообщения в DOM
-    function addMessageToDOM(msg) {
-        const isMyMessage = msg.user_name === currentUserName;
-        
-        const containerClass = isMyMessage ? 'user-message-container' : 'other-message-container';
-        const messageClass = isMyMessage ? 'user-message' : 'other-message';
-        const timeClass = isMyMessage ? 'text-right text-indigo-100' : 'text-left text-gray-500';
-
-        // Элемент аватара (только для чужих сообщений)
-        const avatarHtml = !isMyMessage ? `
-            <div class="w-8 h-8 rounded-full overflow-hidden mr-3 mt-1 self-start hidden sm:block">
-                <img src="${msg.user_pic}" alt="${msg.user_name}" class="w-full h-full object-cover">
-            </div>
-        ` : '';
-
-        // Элемент с именем пользователя (только для чужих сообщений)
-        const nameHtml = !isMyMessage ? `<span class="font-semibold">${msg.user_name}</span>` : '';
-
-
-        const messageElement = `
-            <div class="${containerClass}">
-                ${!isMyMessage ? avatarHtml : ''}
-                <div class="max-w-full">
-                    <div class="text-xs ${isMyMessage ? 'text-gray-500 text-right' : 'text-gray-600 text-left'} mb-0.5">
-                        ${nameHtml}
-                    </div>
-                    <div class="${messageClass}">
-                        <p class="whitespace-pre-wrap">${msg.content}</p>
-                        <span class="message-timestamp block ${timeClass}">
-                            ${formatTime(msg.timestamp)}
-                        </span>
-                    </div>
-                </div>
-                ${isMyMessage ? '' : ''}
-            </div>
-        `;
-
-        messagesDiv.insertAdjacentHTML('beforeend', messageElement);
-        scrollToBottom();
-    }
-    
-    // Функция для добавления статусных сообщений в DOM
-    function addStatusMessageToDOM(data) {
-        const statusElement = `<div class="status-message">${data.msg}</div>`;
-        messagesDiv.insertAdjacentHTML('beforeend', statusElement);
-        scrollToBottom();
-    }
-
-
-    // --- Обработчики Socket.IO ---
-
-    // Подключение к комнате
-    socket.on('connect', function() {
-        // Ничего не делаем здесь, join_room происходит на сервере при маршруте /chat/<room_name>
-    });
-
-    // Обработка отправки сообщения
-    form.addEventListener('submit', function(e) {
-        e.preventDefault();
-        const content = input.value.trim();
-        if (content) {
-            // Отправляем на сервер. Сервер добавит имя пользователя, время и т.д.
-            socket.emit('send_message', { content: content });
-            input.value = ''; // Очищаем поле ввода
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Чат-комната: {{ room_name }}</title>
+    <!-- Подключение Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Настройка шрифта Inter -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f7f9;
         }
-    });
+        /* Стили для скроллбара в области сообщений */
+        .chat-area::-webkit-scrollbar {
+            width: 8px;
+        }
+        .chat-area::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1; /* gray-300 */
+            border-radius: 4px;
+        }
+        .chat-area::-webkit-scrollbar-thumb:hover {
+            background-color: #94a3b8; /* gray-400 */
+        }
+        /* Плавные переходы для интерактивных элементов */
+        .transition-colors {
+            transition-property: background-color, border-color, color, fill, stroke;
+            transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+            transition-duration: 150ms;
+        }
+    </style>
+    <!-- Подключение Socket.IO клиента -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body class="min-h-screen flex flex-col antialiased">
 
-    // Обработка нового сообщения от сервера
-    socket.on('new_message', function(msg) {
-        addMessageToDOM(msg);
-    });
+    <!-- Основной контейнер чата -->
+    <div class="flex flex-col flex-grow w-full max-w-4xl mx-auto shadow-xl rounded-xl bg-white my-8 overflow-hidden">
 
-    // Обработка статусных сообщений (подключение/отключение)
-    socket.on('status_message', function(data) {
-        addStatusMessageToDOM(data);
-    });
+        <!-- Шапка/Заголовок чата -->
+        <header class="p-4 bg-indigo-600 text-white shadow-md flex justify-between items-center rounded-t-xl">
+            <h1 class="text-2xl font-bold">
+                Комната: <span id="room-name-display">{{ room_name }}</span>
+            </h1>
+            <div class="flex items-center space-x-4">
+                <span class="text-sm opacity-90">Ваш ID: <span id="user-id-display">{{ user_id }}</span></span>
+                <a href="{{ url_for('logout') }}" class="bg-red-500 hover:bg-red-700 text-white font-semibold py-1.5 px-4 rounded-lg transition-colors shadow-md">
+                    Выйти
+                </a>
+            </div>
+        </header>
 
-    // Обработка ошибок (например, если нет соединения)
-    socket.on('connect_error', (err) => {
-        console.error("Ошибка подключения Socket.IO:", err.message);
-        addStatusMessageToDOM({ msg: `<span class="text-red-500 font-semibold">Ошибка подключения к чату. Пожалуйста, обновите страницу.</span>` });
-    });
-</script>
+        <!-- Область сообщений (Скроллируемая) -->
+        <div id="messages" class="chat-area flex-grow p-6 space-y-4 overflow-y-auto h-[70vh]">
+            <!-- Здесь будут динамически загружаться и добавляться сообщения -->
 
-{% endblock %}
+            <!-- Пример системного сообщения -->
+            <div id="status-container" class="text-center text-sm text-gray-500 italic py-2">
+                Подключение к чату...
+            </div>
+        </div>
+
+        <!-- Форма ввода сообщения -->
+        <div class="p-4 bg-gray-100 border-t border-gray-200 rounded-b-xl">
+            <form id="send-form" class="flex space-x-3">
+                <input
+                    type="text"
+                    id="message-input"
+                    placeholder="Напишите сообщение..."
+                    autocomplete="off"
+                    maxlength="500"
+                    class="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                >
+                <button
+                    type="submit"
+                    id="send-button"
+                    class="bg-indigo-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-indigo-700 transition-colors shadow-md disabled:bg-gray-400"
+                    disabled
+                >
+                    Отправить
+                </button>
+            </form>
+            <div id="typing-indicator" class="mt-2 text-sm text-gray-500 italic hidden">
+                ... кто-то печатает
+            </div>
+        </div>
+
+    </div>
+
+    <!-- JavaScript логика -->
+    <script>
+        // Инициализация переменных, используя данные из Flask
+        const ROOM_NAME = document.getElementById('room-name-display').textContent.trim();
+        const USER_ID = document.getElementById('user-id-display').textContent.trim();
+        const messagesContainer = document.getElementById('messages');
+        const sendForm = document.getElementById('send-form');
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-button');
+        const typingIndicator = document.getElementById('typing-indicator');
+
+        // Глобальная переменная для Socket.IO
+        let socket;
+
+        // Переменная для управления таймером печати
+        let typingTimer = null;
+        const TYPING_TIMEOUT = 2000; // 2 секунды
+
+        // --- 1. Вспомогательные функции ---
+
+        /**
+         * Добавляет сообщение в контейнер чата.
+         * @param {string} content - Содержимое сообщения.
+         * @param {string} senderName - Имя отправителя.
+         * @param {string} senderId - ID отправителя.
+         * @param {string} timestamp - Время отправки.
+         * @param {boolean} isSystem - Является ли сообщение системным.
+         */
+        function addMessage(content, senderName, senderId, timestamp, isSystem = false) {
+            // Удаляем индикатор "Подключение к чату..." после получения первого сообщения
+            const statusDiv = document.getElementById('status-container');
+            if (statusDiv) statusDiv.remove();
+
+            const messageDiv = document.createElement('div');
+            const isMine = senderId === USER_ID && !isSystem;
+
+            if (isSystem) {
+                // Системное сообщение
+                messageDiv.className = "text-center text-sm text-gray-500 italic py-1";
+                messageDiv.innerHTML = `— ${content} —`;
+            } else {
+                // Пользовательское сообщение
+                const alignment = isMine ? 'justify-end' : 'justify-start';
+                const bubbleColor = isMine ? 'bg-indigo-500 text-white' : 'bg-gray-200 text-gray-800';
+                const nameColor = isMine ? 'text-indigo-600 font-semibold' : 'text-gray-600 font-medium';
+
+                messageDiv.className = `flex ${alignment} w-full`;
+                messageDiv.innerHTML = `
+                    <div class="max-w-xs md:max-w-md lg:max-w-lg p-3 rounded-xl shadow-md ${bubbleColor}">
+                        <div class="text-xs ${nameColor} mb-1 ${isMine ? 'text-right' : 'text-left'}">
+                            ${isMine ? 'Вы' : senderName}
+                        </div>
+                        <p class="whitespace-pre-wrap">${content}</p>
+                        <span class="text-xs mt-1 block ${isMine ? 'text-indigo-100 text-right' : 'text-gray-500 text-left'}">
+                            ${timestamp}
+                        </span>
+                    </div>
+                `;
+            }
+
+            messagesContainer.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        /**
+         * Прокручивает контейнер сообщений до конца.
+         */
+        function scrollToBottom() {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+
+        // --- 2. Логика Socket.IO ---
+
+        function connectSocket() {
+            // Проверяем, существует ли socket.io, чтобы избежать ошибок
+            if (typeof io === 'undefined') {
+                addMessage("Ошибка: Socket.IO клиент не загружен. Проверьте подключение.", "Система", "system", new Date().toLocaleTimeString(), true);
+                return;
+            }
+
+            // Указываем, что нужно подключаться к текущему хосту
+            socket = io();
+
+            // --- ОБРАБОТЧИКИ СОБЫТИЙ СОКЕТА ---
+
+            // 2.1. Подключение
+            socket.on('connect', () => {
+                console.log('Подключено к серверу Socket.IO.');
+                sendButton.disabled = false;
+                messageInput.disabled = false;
+
+                // Запрос на присоединение к комнате и получение истории
+                socket.emit('join', { room: ROOM_NAME });
+                addMessage(`Вы вошли в комнату: ${ROOM_NAME}`, "Система", "system", new Date().toLocaleTimeString(), true);
+            });
+
+            // 2.2. Отключение
+            socket.on('disconnect', () => {
+                console.log('Отключено от сервера Socket.IO.');
+                sendButton.disabled = true;
+                messageInput.disabled = true;
+                addMessage("Потеряно соединение с сервером.", "Система", "system", new Date().toLocaleTimeString(), true);
+            });
+
+            // 2.3. Получение истории сообщений (при входе в комнату)
+            socket.on('message_history', (data) => {
+                messagesContainer.innerHTML = ''; // Очищаем контейнер перед загрузкой истории
+
+                if (data.history && data.history.length > 0) {
+                    data.history.forEach(msg => {
+                        addMessage(msg.content, msg.user_name, msg.user_id, msg.timestamp);
+                    });
+                } else {
+                     document.getElementById('messages').innerHTML = '<div id="status-container" class="text-center text-sm text-gray-500 italic py-2">Сообщений пока нет. Будьте первым!</div>';
+                }
+
+                // Добавляем системное сообщение после истории
+                addMessage(`Ваше имя: ${data.user_name}`, "Система", "system", new Date().toLocaleTimeString(), true);
+                scrollToBottom();
+            });
+
+            // 2.4. Получение нового сообщения
+            socket.on('new_message', (data) => {
+                // Скрываем индикатор печати, если сообщение пришло от печатающего
+                if (data.user_id !== USER_ID) {
+                    hideTypingIndicator(data.user_name);
+                }
+                addMessage(data.content, data.user_name, data.user_id, data.timestamp);
+            });
+
+            // 2.5. Получение системного сообщения
+            socket.on('status_message', (data) => {
+                addMessage(data.msg, "Система", "system", new Date().toLocaleTimeString(), true);
+            });
+
+            // 2.6. Получение информации о печати
+            socket.on('typing_status', (data) => {
+                if (data.user_id !== USER_ID) {
+                    showTypingIndicator(data.user_name);
+                }
+            });
+
+            // 2.7. Ошибка (например, превышение лимита символов)
+            socket.on('error_message', (data) => {
+                addMessage(`Ошибка: ${data.msg}`, "Система", "system", new Date().toLocaleTimeString(), true);
+            });
+        }
+
+
+        // --- 3. Логика отправки и печати ---
+
+        /**
+         * Обработчик отправки формы.
+         */
+        sendForm.onsubmit = function(e) {
+            e.preventDefault();
+            const message = messageInput.value.trim();
+
+            if (message && socket && socket.connected) {
+                socket.emit('send_message', { content: message });
+                messageInput.value = ''; // Очищаем поле ввода
+                // Сбрасываем таймер и отправляем сигнал 'stop_typing' после отправки
+                clearTimeout(typingTimer);
+                typingTimer = null;
+                socket.emit('stop_typing');
+            }
+        };
+
+        /**
+         * Обработчик события ввода (для индикатора печати).
+         */
+        messageInput.oninput = function() {
+            // Если таймер не установлен, отправляем сигнал 'start_typing'
+            if (!typingTimer && socket && socket.connected) {
+                socket.emit('start_typing');
+            }
+
+            // Сбрасываем предыдущий таймер
+            clearTimeout(typingTimer);
+
+            // Устанавливаем новый таймер
+            typingTimer = setTimeout(() => {
+                // По истечении таймаута отправляем сигнал 'stop_typing'
+                if (socket && socket.connected) {
+                    socket.emit('stop_typing');
+                }
+                typingTimer = null;
+            }, TYPING_TIMEOUT);
+        };
+
+        // --- 4. Логика индикатора печати ---
+        let typingUsers = new Set();
+        let indicatorTimeout = null;
+
+        /**
+         * Показывает, что пользователь печатает.
+         * @param {string} userName - Имя печатающего пользователя.
+         */
+        function showTypingIndicator(userName) {
+            typingUsers.add(userName);
+            updateTypingIndicator();
+
+            // Сбрасываем предыдущий таймер, если он был
+            clearTimeout(indicatorTimeout);
+
+            // Устанавливаем таймер для автоматического скрытия индикатора, если
+            // в течение 3 секунд не пришло новое событие 'typing_status'
+            indicatorTimeout = setTimeout(() => {
+                typingUsers.delete(userName);
+                updateTypingIndicator();
+            }, 3000); // 3 секунды
+        }
+
+        /**
+         * Скрывает, что пользователь печатает.
+         * @param {string} userName - Имя пользователя, который перестал печатать.
+         */
+        function hideTypingIndicator(userName) {
+            typingUsers.delete(userName);
+            updateTypingIndicator();
+        }
+
+        /**
+         * Обновляет текст индикатора печати.
+         */
+        function updateTypingIndicator() {
+            if (typingUsers.size > 0) {
+                const usersArray = Array.from(typingUsers);
+                let text = '';
+                if (usersArray.length === 1) {
+                    text = `${usersArray[0]} печатает...`;
+                } else if (usersArray.length > 1) {
+                    text = `Несколько человек печатают...`;
+                }
+                typingIndicator.textContent = text;
+                typingIndicator.classList.remove('hidden');
+            } else {
+                typingIndicator.classList.add('hidden');
+            }
+        }
+
+
+        // --- 5. Запуск приложения ---
+        window.onload = function() {
+            connectSocket();
+        };
+
+    </script>
+
+</body>
+</html>

@@ -1,10 +1,14 @@
+import eventlet
+eventlet.monkey_patch() # !!! ОЧЕНЬ ВАЖНО: Асинхронный патч должен быть первым импортом !!!
+
 import os
 import json
 import secrets
 from datetime import datetime, timezone
 
 from flask import Flask, render_template, redirect, url_for, request, session, abort, flash
-from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect, rooms
+# ВАЖНО: 'rooms' теперь не используется в connect
+from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -60,11 +64,14 @@ class Message(db.Model):
 
     def to_dict(self):
         """Возвращает сообщение в виде словаря для отправки через SocketIO."""
+        # Форматирование времени в соответствии с часовым поясом UTC
+        # Если вы хотите локальное время, нужно добавить логику конвертации.
+        # Для простоты оставляем UTC-время в формате ЧЧ:ММ
         return {
             'user_name': self.user_name,
             'user_pic': self.user_pic,
             'content': self.content,
-            'timestamp': self.timestamp.strftime('%H:%M'), # Форматирование времени
+            'timestamp': self.timestamp.strftime('%H:%M'), 
         }
 
 # --- 4. Вспомогательные функции (OAuth) ---
@@ -81,7 +88,7 @@ def index():
     # Если пользователь авторизован, отправляем его на выбор комнаты
     if 'user_id' in session:
         return redirect(url_for("room_choice"))
-    # Иначе, показываем страницу входа
+    # Иначе, показываем страницу входа (требуется шаблон login.html)
     return render_template("login.html")
 
 @app.route("/google-login")
@@ -91,9 +98,15 @@ def google_login():
     authorization_endpoint = google_provider_cfg["authorization_endpoint"]
 
     # Используем клиент для создания запроса
+    redirect_uri = request.base_url + "/callback"
+    
+    # ПРОВЕРКА: Если приложение работает на http, request.base_url будет http://.
+    # Для Railway или других HTTPS-хостов это может вызвать проблему, но ProxyFix
+    # должен исправить request.base_url в большинстве случаев.
+
     request_uri = client.prepare_request_uri(
         authorization_endpoint,
-        redirect_uri=request.base_url + "/callback",
+        redirect_uri=redirect_uri,
         scope=["openid", "email", "profile"],
     )
     return redirect(request_uri)
@@ -101,10 +114,8 @@ def google_login():
 @app.route("/google-login/callback")
 def callback():
     """Обрабатывает ответ от Google и авторизует пользователя."""
-    # Получаем код авторизации
     code = request.args.get("code")
 
-    # Получаем конфигурацию
     google_provider_cfg = get_google_provider_cfg()
     token_endpoint = google_provider_cfg["token_endpoint"]
 
@@ -122,7 +133,6 @@ def callback():
         auth=(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET),
     )
 
-    # Парсим токен, чтобы получить информацию о пользователе (ID-токен)
     client.parse_request_body_response(token_response.text)
 
     # Получаем конечную точку информации о пользователе
@@ -134,7 +144,6 @@ def callback():
     if userinfo_response.json().get("email_verified"):
         user_data = userinfo_response.json()
         
-        # Получаем необходимые данные
         user_id = user_data["sub"]
         user_name = user_data["name"]
         user_email = user_data["email"]
@@ -146,7 +155,6 @@ def callback():
             user = User(id=user_id, name=user_name, email=user_email, profile_pic=user_pic)
             db.session.add(user)
         else:
-            # Обновляем имя и фото на случай, если они изменились
             user.name = user_name
             user.profile_pic = user_pic
         
@@ -156,7 +164,8 @@ def callback():
         session['user_id'] = user_id
         session['user_name'] = user_name
         session['user_pic'] = user_pic
-
+        session['user_email'] = user_email # Добавляем почту для logout
+        
         flash(f"Добро пожаловать, {user_name}!", 'success')
         return redirect(url_for("room_choice"))
 
@@ -189,6 +198,10 @@ def room_choice():
         else:
             room_error = "Имя комнаты не может быть пустым."
             
+    # Переменные для шаблона room_choice.html
+    user_name = session.get('user_name', 'Гость')
+    user_email = session.get('user_email', 'неизвестно')
+    
     # Заглушки для популярных комнат
     popular_rooms = [
         "Общий Флуд", 
@@ -198,7 +211,11 @@ def room_choice():
         "Спорт"
     ]
             
-    return render_template("room_choice.html", popular_rooms=popular_rooms, room_error=room_error)
+    return render_template("room_choice.html", 
+                           popular_rooms=popular_rooms, 
+                           room_error=room_error,
+                           user_name=user_name,
+                           user_email=user_email)
 
 @app.route("/chat/<room_name>")
 def chat(room_name):
@@ -207,7 +224,9 @@ def chat(room_name):
         flash("Пожалуйста, войдите, чтобы продолжить.", 'error')
         return redirect(url_for("index"))
 
-    if not room_name.strip():
+    # Нормализация имени комнаты
+    room_name = room_name.strip()
+    if not room_name:
         flash("Недопустимое имя комнаты.", 'error')
         return redirect(url_for("room_choice"))
     
@@ -216,9 +235,9 @@ def chat(room_name):
 
     # Загружаем последние 50 сообщений для этой комнаты
     history_messages = Message.query.filter_by(room_name=room_name) \
-                                    .order_by(Message.timestamp.desc()) \
-                                    .limit(50) \
-                                    .all()
+                                   .order_by(Message.timestamp.desc()) \
+                                   .limit(50) \
+                                   .all()
     # Разворачиваем список, чтобы старые сообщения были в начале
     history_messages.reverse()
     
@@ -233,62 +252,65 @@ def chat(room_name):
 
 # --- 7. Структура SocketIO ---
 
-# Карта для отслеживания, в какой комнате находится каждый пользователь
-# (user_id -> room_name)
-user_room_map = {} 
+# Карта для отслеживания, в какой комнате находится каждый пользователь (sid -> room_name)
+# Используем sid, так как это уникально для каждого SocketIO-соединения
+sid_room_map = {} 
 
 @socketio.on('connect')
 def handle_connect():
-    """Обрабатывает подключение нового клиента."""
+    """Обрабатывает подключение нового клиента (только проверка авторизации)."""
     user_id = session.get("user_id")
-    # Проверяем, авторизован ли пользователь
+    # Проверяем, авторизован ли пользователь в Flask-сессии
     if not user_id:
         print("Неавторизованный клиент попытался подключиться.")
         disconnect()
         return
 
-    # Клиент должен быть перенаправлен на /chat/<room_name>
-    # Room name должен быть получен из HTTP-маршрута.
-    # Поскольку SocketIO-соединение устанавливается после загрузки страницы, 
-    # имя комнаты уже должно быть в сессии или извлекаться из запроса.
+    # Если авторизован, ждем, пока клиент отправит событие 'join_room'
+    print(f'Пользователь {session["user_name"]} (SID: {request.sid}) подключен.')
 
-    # Используем rooms() чтобы получить текущую комнату, в которой он должен быть
-    current_rooms = rooms()
-    if len(current_rooms) > 1: # 1-я комната - это его личный SID
-        room_name = current_rooms[1]
-    else:
-        # Если комнаты нет, просто отключаемся, т.к. пользователь не на странице чата
-        disconnect()
-        return
-
-    # Обновляем карту
-    if user_id in user_room_map and user_room_map[user_id] != room_name:
-        # Если пользователь был в другой комнате, выходим из нее
-        leave_room(user_room_map[user_id]) 
-
-    user_room_map[user_id] = room_name
+@socketio.on('join_room')
+def handle_join_room(data):
+    """Явно присоединяет клиента к комнате."""
+    user_id = session.get("user_id")
+    room_name = data.get('room')
     
-    # Присоединяемся к комнате (Flask-SocketIO это делает автоматически, но для ясности оставим)
+    if not all([user_id, room_name]):
+        return 
+
+    # 1. Если пользователь уже в другой комнате, выходим из нее
+    current_sid = request.sid
+    if current_sid in sid_room_map:
+        old_room = sid_room_map[current_sid]
+        if old_room != room_name:
+            leave_room(old_room)
+            print(f'{session["user_name"]} покинул комнату {old_room}.')
+
+    # 2. Присоединяемся к новой комнате
     join_room(room_name)
+    sid_room_map[current_sid] = room_name
 
-    # Сообщаем всем, что пользователь присоединился
+    # 3. Сообщаем всем, что пользователь присоединился
     emit('status_message', 
-         {'msg': f'{session["user_name"]} присоединился к комнате {room_name}.'}, 
-         room=room_name)
+          {'msg': f'{session["user_name"]} присоединился к комнате {room_name}.'}, 
+          room=room_name)
     
-    print(f'Пользователь {session["user_name"]} подключен к комнате {room_name}.')
+    print(f'Пользователь {session["user_name"]} (SID: {current_sid}) присоединен к комнате {room_name}.')
+
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Обрабатывает отключение пользователя."""
     user_id = session.get("user_id")
-    if user_id in user_room_map:
-        room_name = user_room_map.pop(user_id)
+    current_sid = request.sid
+    
+    if current_sid in sid_room_map:
+        room_name = sid_room_map.pop(current_sid)
         
         # Сообщаем всем, что пользователь отключился
         emit('status_message', 
-             {'msg': f'{session["user_name"]} покинул комнату {room_name}.'}, 
-             room=room_name)
+              {'msg': f'{session["user_name"]} покинул комнату {room_name}.'}, 
+              room=room_name)
         
         print(f'Пользователь {session["user_name"]} отключен от комнаты {room_name}.')
 
@@ -296,7 +318,8 @@ def handle_disconnect():
 def handle_message(data):
     """Обрабатывает отправку нового сообщения."""
     user_id = session.get("user_id")
-    room_name = user_room_map.get(user_id)
+    current_sid = request.sid
+    room_name = sid_room_map.get(current_sid)
     content = data.get('content', '').strip()
 
     if not all([user_id, room_name, content]):
@@ -339,10 +362,5 @@ with app.app_context():
 # --- 9. Запуск Приложения ---
 
 # Запуск приложения через gunicorn / eventlet (как указано в Procfile)
-# if __name__ == '__main__':
-#     socketio.run(app, debug=True)
-
-# Примечание: Для продакшена используем gunicorn (как настроено в Procfile), 
-# но если нужно запустить локально:
 # if __name__ == '__main__':
 #     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
