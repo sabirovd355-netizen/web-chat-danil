@@ -47,7 +47,8 @@
                        class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" 
                        required 
                        pattern="[0-9A-Za-z]{4,20}" 
-                       title="ID должен содержать от 4 до 20 букв или цифр.">
+                       title="ID должен содержать от 4 до 20 букв или цифр."
+                       oninput="this.value = this.value.toUpperCase()">
                 
                 <button type="submit" class="main-button join-button w-full py-4 text-xl font-bold 
                                            bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
@@ -65,7 +66,12 @@
         // Функция для генерации случайного ID комнаты
         function generateRandomId() {
             // Генерируем 6-значный случайный ID
-            return Math.floor(100000 + Math.random() * 900000).toString();
+            const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+            let result = '';
+            for (let i = 0; i < 6; i++) {
+                result += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return result;
         }
 
         // JS для создания комнаты

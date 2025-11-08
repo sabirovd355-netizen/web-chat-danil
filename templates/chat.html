@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Чат | Комната {{ room_name }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Подключаем Socket.IO клиент -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    <style>
+        .chat-container {
+            height: calc(100vh - 80px); /* Высота на весь экран минус высота шапки и подвала */
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column-reverse; /* Показываем новые сообщения снизу */
+        }
+        /* Стиль для сообщения о статусе (вход/выход) */
+        .status-message {
+            text-align: center;
+            font-size: 0.8rem;
+            color: #6b7280;
+            margin: 8px 0;
+        }
+        /* Убедимся, что контейнер сообщений находится в самом низу */
+        .messages-wrapper {
+            display: flex;
+            flex-direction: column-reverse;
+            padding-top: 10px;
+        }
+        /* Стилизация аватаров */
+        .avatar {
+            width: 32px;
+            height: 32px;
+            object-fit: cover;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 flex flex-col min-h-screen font-sans">
+
+    <!-- Шапка -->
+    <header class="bg-white shadow-md p-3 flex items-center justify-between sticky top-0 z-10">
+        <h1 class="text-xl font-bold text-indigo-700 truncate">
+            Комната: {{ room_name }}
+        </h1>
+        <a href="{{ url_for('room_choice_menu') }}" class="text-sm bg-gray-200 hover:bg-gray-300 text-gray-800 py-1 px-3 rounded-lg transition duration-150">
+            Выйти из комнаты
+        </a>
+    </header>
+
+    <!-- Основное тело чата -->
+    <main class="flex-grow p-4 overflow-hidden">
+        <div id="messages" class="chat-container messages-wrapper">
+            <!-- Сообщения будут добавляться сюда JS -->
+            
+            <!-- Загрузка истории сообщений из Flask -->
+            {% for message in messages %}
+                <div class="message-item flex items-start space-x-3 mb-4">
+                    <img class="avatar rounded-full" src="{{ message.user_pic or 'https://placehold.co/32x32/E0E7FF/4F46E5?text=U' }}" alt="Аватар">
+                    <div class="flex-grow">
+                        <div class="flex items-baseline space-x-2">
+                            <span class="font-bold text-gray-800">{{ message.user_name }}</span>
+                            <span class="text-xs text-gray-400">{{ message.timestamp }}</span>
+                        </div>
+                        <p class="bg-white p-3 rounded-xl shadow-sm text-gray-700 mt-1 max-w-full break-words">
+                            {{ message.content }}
+                        </p>
+                    </div>
+                </div>
+            {% endfor %}
+            <!-- Конец истории сообщений -->
+        </div>
+    </main>
+
+    <!-- Форма отправки сообщения -->
+    <footer class="bg-white border-t border-gray-200 p-4 sticky bottom-0 z-10">
+        <form id="sendForm" class="flex space-x-3">
+            <input type="text" id="messageInput" placeholder="Введите ваше сообщение..." 
+                   class="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" 
+                   autocomplete="off" required>
+            <button type="submit" class="bg-indigo-600 text-white font-semibold py-3 px-6 rounded-lg 
+                                         hover:bg-indigo-700 transition duration-150 shadow-md">
+                Отправить
+            </button>
+        </form>
+    </footer>
+
+    <script>
+        // Инициализация Socket.IO
+        const socket = io();
+        const messagesDiv = document.getElementById('messages');
+        const form = document.getElementById('sendForm');
+        const messageInput = document.getElementById('messageInput');
+
+        // --- Утилиты для отрисовки ---
+        function renderMessage(data) {
+            const isStatus = data.type === 'status';
+
+            // Если это статусное сообщение
+            if (isStatus) {
+                const statusElement = document.createElement('div');
+                statusElement.className = 'status-message';
+                statusElement.textContent = data.msg;
+                messagesDiv.prepend(statusElement); // Добавляем сверху в messagesDiv, который имеет flex-direction: column-reverse
+                return;
+            }
+
+            // Если это обычное сообщение
+            const messageItem = document.createElement('div');
+            messageItem.className = 'message-item flex items-start space-x-3 mb-4';
+            
+            // Аватар
+            const avatarSrc = data.user_pic || 'https://placehold.co/32x32/E0E7FF/4F46E5?text=U';
+            const avatar = document.createElement('img');
+            avatar.className = 'avatar rounded-full';
+            avatar.src = avatarSrc;
+            avatar.alt = 'Аватар';
+
+            // Контент сообщения
+            const contentWrapper = document.createElement('div');
+            contentWrapper.className = 'flex-grow';
+
+            const header = document.createElement('div');
+            header.className = 'flex items-baseline space-x-2';
+            header.innerHTML = `<span class="font-bold text-gray-800">${data.user_name}</span><span class="text-xs text-gray-400">${data.timestamp}</span>`;
+
+            const content = document.createElement('p');
+            content.className = 'bg-white p-3 rounded-xl shadow-sm text-gray-700 mt-1 max-w-full break-words';
+            content.textContent = data.content;
+            
+            contentWrapper.appendChild(header);
+            contentWrapper.appendChild(content);
+
+            messageItem.appendChild(avatar);
+            messageItem.appendChild(contentWrapper);
+            
+            messagesDiv.prepend(messageItem); // Добавляем сверху
+        }
+
+        // --- Обработчики Socket.IO ---
+
+        // При получении нового сообщения
+        socket.on('new_message', function(data) {
+            renderMessage(data);
+        });
+
+        // При получении статусного сообщения (кто-то вошел/вышел)
+        socket.on('status_message', function(data) {
+            renderMessage({ msg: data.msg, type: 'status' });
+        });
+
+        // Отправка сообщения
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const content = messageInput.value.trim();
+
+            if (content) {
+                // Отправляем сообщение на сервер
+                socket.emit('send_message', { content: content });
+                // Очищаем поле ввода
+                messageInput.value = '';
+                // Фокусируем поле ввода
+                messageInput.focus();
+            }
+        });
+
+    </script>
+</body>
+</html>

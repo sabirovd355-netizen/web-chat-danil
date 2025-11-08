@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Вход | Создание комнат</title>
+    <title>Вход | Чат</title>
     <!-- Подключаем Tailwind CSS для современного дизайна -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -27,10 +27,10 @@
         <!-- Сообщения Flask -->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                <div class="mb-4">
+                <div class="mb-4 space-y-2">
                 {% for category, message in messages %}
                     <p class="p-3 text-sm rounded-lg text-white 
-                    {% if category == 'error' %}bg-red-500
+                    {% if category == 'error' %}bg-red-500 font-bold
                     {% elif category == 'warning' %}bg-yellow-500
                     {% else %}bg-blue-500{% endif %}">
                         {{ message }}
