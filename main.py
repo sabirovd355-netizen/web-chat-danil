@@ -15,7 +15,6 @@ import requests
 app = Flask(__name__)
 
 # !!! ИСПРАВЛЕНИЕ ДЛЯ RAILWAY (HTTPS) !!!
-# Говорим Flask, что мы находимся за прокси-сервером, и нужно использовать HTTPS.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # Устанавливаем секретный ключ для защиты сессий
@@ -38,8 +37,8 @@ socketio = SocketIO(app)
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:5000/google/callback")
-# Разрешаем HTTP для локальной разработки, если не установлены переменные окружения
+# Важно: В рабочей среде замените на ваш реальный URI
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:5000/google/callback") 
 if not GOOGLE_CLIENT_ID:
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
@@ -67,7 +66,8 @@ class Message(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     user = db.relationship('User', backref=db.backref('messages', lazy=True))
     content = db.Column(db.Text, nullable=False)
-    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    # Используем UTC для единообразия
+    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc)) 
 
     def to_dict(self):
         return {
@@ -75,13 +75,12 @@ class Message(db.Model):
             'user_name': self.user.name,
             'user_pic': self.user.profile_pic,
             'content': self.content,
-            'timestamp': self.timestamp.strftime('%H:%M'),
+            'timestamp': self.timestamp.astimezone(timezone.utc).strftime('%H:%M'),
         }
 
 # --- АВТОМАТИЧЕСКОЕ СОЗДАНИЕ ТАБЛИЦ ---
 with app.app_context():
     try:
-        # Создаст таблицы, если они еще не существуют.
         db.create_all()
         print("Проверка/создание таблиц базы данных завершена.")
     except Exception as e:
@@ -107,13 +106,14 @@ def get_or_create_user(google_id, name, picture):
     return user
 
 
-# --- 4. Маршруты Flask ---
+# --- 4. Маршруты Flask (ОБНОВЛЕНЫ) ---
 
 @app.route("/")
 def index():
-    """Главная страница. Если пользователь вошел, перенаправляет в чат."""
+    """Главная страница. Если пользователь вошел, перенаправляет в меню выбора комнаты."""
     if "user_id" in session:
-        return redirect(url_for("chat"))
+        # Перенаправляем на новое меню выбора комнаты
+        return redirect(url_for("room_choice_menu")) 
     
     # Для отображения кнопки входа
     google_config = get_google_provider_cfg()
@@ -189,24 +189,45 @@ def callback():
     session["user_name"] = user.name
     session["user_pic"] = user.profile_pic
 
-    return redirect(url_for("chat"))
+    # После успешного входа перенаправляем на выбор комнаты
+    return redirect(url_for("room_choice_menu")) 
 
 @app.route("/logout")
 def logout():
     """Выход из системы."""
+    # Также очищаем информацию о текущей комнате
+    if "current_room" in session:
+        session.pop("current_room")
+        
     session.clear()
     flash("Вы успешно вышли из системы.", 'info')
     return redirect(url_for("index"))
 
-@app.route("/chat")
-def chat():
-    """Основная страница чата."""
+@app.route("/menu")
+def room_choice_menu():
+    """Меню выбора: Создать комнату или Присоединиться (Рендерит room_choice.html)."""
+    if "user_id" not in session:
+        flash("Пожалуйста, войдите в систему, чтобы выбрать комнату.", 'warning')
+        return redirect(url_for("index")) 
+        
+    # Удаляем информацию о старой комнате при переходе в меню
+    if "current_room" in session:
+        session.pop("current_room")
+        
+    return render_template("room_choice.html")
+
+
+@app.route("/chat/<room_id>")
+def chat(room_id):
+    """Страница чата для конкретной комнаты."""
     if "user_id" not in session:
         flash("Пожалуйста, войдите в систему, чтобы использовать чат.", 'warning')
         return redirect(url_for("index"))
     
-    # Мы используем одну "общую" комнату для простоты
-    room_name = "global_chat"
+    room_name = room_id
+    
+    # !!! Сохраняем имя комнаты в сессии для SocketIO !!!
+    session["current_room"] = room_name
     
     # Загружаем последние 50 сообщений для отображения истории
     messages = Message.query.filter_by(room_name=room_name) \
@@ -217,34 +238,40 @@ def chat():
     # Обратный порядок для правильного отображения (старые сверху)
     messages.reverse() 
 
+    # ВАЖНО: Вам нужно будет создать файл chat.html для работы чата
     return render_template("chat.html", 
                            user_name=session["user_name"],
                            user_pic=session["user_pic"],
                            room_name=room_name,
                            messages=[m.to_dict() for m in messages])
 
-# --- 5. Обработчики SocketIO ---
+# --- 5. Обработчики SocketIO (ОБНОВЛЕНЫ) ---
 
 @socketio.on('connect')
 def handle_connect():
-    """Обрабатывает подключение нового пользователя."""
+    """
+    Обрабатывает подключение нового пользователя.
+    Использует session["current_room"], установленную маршрутом /chat/<room_id>.
+    """
     user_id = session.get("user_id")
-    if not user_id:
-        # Отключаем неаутентифицированных пользователей
-        print("Неаутентифицированный пользователь отключен.")
+    room_name = session.get("current_room") 
+
+    if not user_id or not room_name:
+        # Отключаем, если нет аутентификации или комнаты
+        print("Неаутентифицированный пользователь или отсутствует комната отключен.")
         disconnect()
         return
 
-    # Присоединяем пользователя к комнате
-    room_name = "global_chat"
+    # Присоединяем пользователя к нужной комнате
     join_room(room_name)
     user_room_map[user_id] = room_name
 
     # Сообщаем всем в комнате, что кто-то присоединился
     emit('status_message', 
-         {'msg': f'{session["user_name"]} присоединился к чату.'}, 
+         {'msg': f'{session["user_name"]} присоединился к комнате {room_name}.'}, 
          room=room_name)
     print(f'Пользователь {session["user_name"]} подключен к комнате {room_name}.')
+
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -255,7 +282,7 @@ def handle_disconnect():
         
         # Сообщаем всем, что пользователь отключился
         emit('status_message', 
-             {'msg': f'{session["user_name"]} покинул чат.'}, 
+             {'msg': f'{session["user_name"]} покинул комнату {room_name}.'}, 
              room=room_name)
         
         print(f'Пользователь {session["user_name"]} отключен от комнаты {room_name}.')
@@ -293,8 +320,5 @@ def handle_message(data):
 
 # --- 6. Запуск приложения ---
 
-# В этом блоке Flask запускается только при локальном запуске (python main.py). 
-# На Railway приложение запускается через gunicorn.
 if __name__ == "__main__":
-    # Запускаем SocketIO
     socketio.run(app, debug=True)
