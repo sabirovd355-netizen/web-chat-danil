@@ -1,8 +1,19 @@
+Основные компоненты Flask
+
 Flask
 Flask-SocketIO
 Flask-SQLAlchemy
+Flask-Migrate  # Рекомендуется для управления миграциями базы данных
+
+Продакшн-сервер и воркер для асинхронной работы SocketIO
+
 gunicorn
-psycopg2-binary
-psycopg2
-werkzeug
 eventlet
+
+Драйвер для PostgreSQL (продакшн-база данных на Railway)
+
+psycopg2-binary
+
+Дополнительные утилиты, используемые Flask/Gunicorn
+
+werkzeug
