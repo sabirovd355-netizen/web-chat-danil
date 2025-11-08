@@ -1,97 +1,103 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Выбор Комнаты</title>
-    <!-- Подключаем Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        /* Дополнительный стиль для эффекта кнопки */
-        .main-button {
-            transition: all 0.2s ease-in-out;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
-        }
-        .main-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
-        }
-        .main-button:active {
-            transform: translateY(0);
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
-        }
-    </style>
-</head>
-<body class="bg-gray-100 flex items-center justify-center min-h-screen font-sans p-4">
-    <div class="menu-container bg-white p-8 md:p-10 rounded-xl shadow-2xl max-w-lg w-full text-center">
-        <h1 class="text-3xl font-extrabold text-indigo-700 mb-1">
-            Привет, {{ session.get("user_name", "Пользователь") }}!
+{% extends "base.html" %}
+
+{% block title %}Выбор Комнаты{% endblock %}
+
+{% block content %}
+<!-- 
+    Этот скрипт загружает Tailwind CSS, чтобы стили работали. 
+    В реальном приложении он может быть вынесен в base.html
+-->
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+    /* Используем шрифт Inter для современного вида */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+    body {
+        font-family: 'Inter', sans-serif;
+    }
+</style>
+
+<div class="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+    <div class="w-full max-w-md bg-white dark:bg-gray-800 p-8 md:p-10 shadow-2xl rounded-xl space-y-6">
+        <h1 class="text-3xl font-extrabold text-center text-gray-900 dark:text-white">
+            Добро пожаловать в Чат!
         </h1>
-        <p class="text-gray-500 mb-8">
-            Выберите действие, чтобы начать общение.
-        </p>
-
-        <div class="space-y-6">
-            <!-- 1. Создать Комнату -->
-            <div class="menu-item">
-                <button class="main-button create-button w-full py-4 text-xl font-bold 
-                               bg-green-500 text-white rounded-lg hover:bg-green-600" 
-                        onclick="createRoom()">
-                    Создать новую Комнату
-                </button>
-            </div>
-
-            <!-- 2. Присоединиться по ID -->
-            <form id="joinForm" class="menu-item space-y-4">
-                <input type="text" id="roomIdInput" placeholder="Введите ID комнаты (например, 1234)" 
-                       class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" 
-                       required 
-                       pattern="[0-9A-Za-z]{4,20}" 
-                       title="ID должен содержать от 4 до 20 букв или цифр."
-                       oninput="this.value = this.value.toUpperCase()">
-                
-                <button type="submit" class="main-button join-button w-full py-4 text-xl font-bold 
-                                           bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-                    Присоединиться по ID
-                </button>
-            </form>
+        
+        <!-- Отображение информации о текущем пользователе, используя переменную, переданную из Flask -->
+        <div class="text-center p-3 bg-indigo-50 dark:bg-indigo-900/50 rounded-lg shadow-inner">
+            <p class="text-lg font-medium text-indigo-700 dark:text-indigo-300">
+                Вы вошли как: 
+                <!-- Предполагается, что 'user_name' передается в контексте шаблона -->
+                <span class="font-bold">{{ user_name }}</span>
+            </p>
         </div>
 
-        <a href="{{ url_for('logout') }}" class="logout-link block mt-8 text-red-500 hover:text-red-700 transition duration-150 text-sm">
-            Выйти из аккаунта
-        </a>
-    </div>
-
-    <script>
-        // Функция для генерации случайного ID комнаты
-        function generateRandomId() {
-            // Генерируем 6-значный случайный ID
-            const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-            let result = '';
-            for (let i = 0; i < 6; i++) {
-                result += chars.charAt(Math.floor(Math.random() * chars.length));
-            }
-            return result;
-        }
-
-        // JS для создания комнаты
-        function createRoom() {
-            const newRoomId = generateRandomId();
-            // Перенаправление на новый маршрут /chat/<room_id>
-            window.location.href = `/chat/${newRoomId}`;
-        }
-
-        // JS для обработки присоединения по ID
-        document.getElementById('joinForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            const roomId = document.getElementById('roomIdInput').value.trim();
+        <!-- Форма для выбора/создания комнаты -->
+        <form method="POST" action="{{ url_for('room_choice') }}" class="space-y-6">
+            <div class="relative">
+                <label for="room_name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Введите название комнаты
+                </label>
+                <input 
+                    type="text" 
+                    id="room_name" 
+                    name="room_name" 
+                    required 
+                    minlength="3"
+                    maxlength="50"
+                    placeholder="Например, 'Общий', 'Технологии', 'Проект-Z'"
+                    class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm 
+                           focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 
+                           text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400"
+                >
+            </div>
             
-            // Простая валидация перед перенаправлением
-            if (roomId) {
-                // Перенаправление на маршрут /chat/<room_id>
-                window.location.href = `/chat/${roomId}`;
-            }
-        });
-    </script>
-</body>
-</html>
+            <button 
+                type="submit" 
+                class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md 
+                       text-base font-semibold text-white bg-indigo-600 hover:bg-indigo-700 
+                       focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 
+                       transition duration-150 ease-in-out transform hover:scale-[1.01]"
+            >
+                Присоединиться к Комнате
+            </button>
+        </form>
+
+        <!-- Разделитель -->
+        <div class="relative">
+            <div class="absolute inset-0 flex items-center" aria-hidden="true">
+                <div class="w-full border-t border-gray-300 dark:border-gray-700"></div>
+            </div>
+            <div class="relative flex justify-center text-sm">
+                <span class="px-2 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                    Или
+                </span>
+            </div>
+        </div>
+
+        <!-- Кнопка выхода (Logout), предполагается маршрут 'logout' -->
+        <a href="{{ url_for('logout') }}" 
+           class="w-full text-center block py-2 px-4 border border-transparent rounded-lg 
+                  text-sm font-medium text-red-600 bg-red-100 hover:bg-red-200 
+                  dark:bg-red-900/30 dark:hover:bg-red-900/50 dark:text-red-400 
+                  transition duration-150 ease-in-out shadow-sm"
+        >
+            Выйти из учетной записи ({{ user_email }})
+        </a>
+
+        <!-- Блок для отображения Flash-сообщений (если есть) -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="space-y-2 mt-4">
+                    {% for category, message in messages %}
+                        <li class="p-3 rounded-lg text-sm {% if category == 'error' %}bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200{% else %}bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200{% endif %}">
+                            {{ message }}
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+    </div>
+</div>
+
+{% endblock %}

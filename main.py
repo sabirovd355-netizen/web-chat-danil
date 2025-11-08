@@ -3,6 +3,11 @@ import json
 import secrets
 from datetime import datetime, timezone
 
+# --- КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: eventlet.monkey_patch() ДОЛЖЕН БЫТЬ ПЕРВЫМ ИМПОРТОМ ---
+import eventlet
+eventlet.monkey_patch()
+# ----------------------------------------------------------------------------------
+
 from flask import Flask, render_template, redirect, url_for, request, session, abort, flash
 from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect, rooms
 from flask_sqlalchemy import SQLAlchemy
@@ -31,13 +36,14 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 # Используем eventlet для SocketIO, так как это указано в Procfile
+# Убедитесь, что worker_class в Procfile совпадает с используемым SocketIO движком
 socketio = SocketIO(app) 
 
 # Конфигурация Google OAuth
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
-# Важно: В рабочей среде замените на ваш реальный URI
+# Важно: В рабочей среде GOOGLE_REDIRECT_URI должен быть установлен через Railway Variables
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:5000/google/callback") 
 if not GOOGLE_CLIENT_ID:
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
@@ -145,7 +151,7 @@ def callback():
     code = request.args.get("code")
     
     if not code:
-        flash("Ошибка: Не получен код авторизации от Google.", 'error')
+        flash("Ошибка: Не получен код авторизации от Google. (Проверьте GOOGLE_REDIRECT_URI в Google Console и на хостинге)", 'error')
         return redirect(url_for("index"))
 
     # Находим URL-адрес для обмена кодом на токен
@@ -180,7 +186,7 @@ def callback():
     
     # Получаем данные, необходимые для создания/аутентификации пользователя
     google_id = user_info["sub"]
-    name = user_info["given_name"] or user_info.get("name", "Гость")
+    name = user_info.get("given_name") or user_info.get("name", "Гость")
     picture = user_info["picture"]
 
     # Сохраняем пользователя в нашей БД и устанавливаем сессию
@@ -321,4 +327,5 @@ def handle_message(data):
 # --- 6. Запуск приложения ---
 
 if __name__ == "__main__":
+    # Локально запускаем через SocketIO.run, а на Railway - через gunicorn
     socketio.run(app, debug=True)

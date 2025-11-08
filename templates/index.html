@@ -3,55 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Вход | Чат</title>
-    <!-- Подключаем Tailwind CSS для современного дизайна -->
+    <title>Вход в Чат</title>
+    <!-- Подключение Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        /* Для стилизации Google кнопки */
-        .google-icon {
-            margin-right: 8px;
-            width: 18px;
-            height: 18px;
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .flash-message {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            opacity: 0.95;
         }
     </style>
 </head>
-<body class="bg-gray-100 flex items-center justify-center min-h-screen font-sans">
-    <div class="container bg-white p-10 rounded-xl shadow-2xl max-w-md w-full text-center">
-        <h1 class="text-3xl font-extrabold text-gray-800 mb-4">
-            Добро пожаловать!
-        </h1>
-        <p class="text-gray-500 mb-8">
-            Войдите, чтобы создать или присоединиться к комнате для общения.
-        </p>
-        
-        <!-- Сообщения Flask -->
+<body>
+    <div class="w-full max-w-sm bg-white p-8 rounded-xl shadow-2xl border border-gray-100">
+        <h1 class="text-3xl font-bold text-gray-800 text-center mb-6">Добро пожаловать</h1>
+        <p class="text-center text-gray-500 mb-8">Войдите, чтобы начать общаться</p>
+
+        <!-- Сообщения Flash -->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                <div class="mb-4 space-y-2">
                 {% for category, message in messages %}
-                    <p class="p-3 text-sm rounded-lg text-white 
-                    {% if category == 'error' %}bg-red-500 font-bold
-                    {% elif category == 'warning' %}bg-yellow-500
-                    {% else %}bg-blue-500{% endif %}">
+                    <div class="flash-message {% if category == 'error' %}bg-red-500 text-white{% elif category == 'warning' %}bg-yellow-500 text-black{% else %}bg-blue-500 text-white{% endif %}">
                         {{ message }}
-                    </p>
+                    </div>
                 {% endfor %}
-                </div>
             {% endif %}
         {% endwith %}
 
-        <!-- Кнопка входа через Google -->
+        <!-- Кнопка Входа через Google -->
         <a href="{{ url_for('login') }}" 
-           class="google-button inline-flex items-center justify-center w-full py-3 px-6 
-                  bg-white text-gray-700 border border-gray-300 rounded-lg shadow-md 
-                  hover:bg-gray-50 transition duration-150 ease-in-out font-semibold">
-            <img class="google-icon" src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" alt="Google logo">
-            Войти через Google
+           class="w-full flex items-center justify-center space-x-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 shadow-md transform hover:scale-[1.01] active:scale-[0.99]">
+            <svg class="w-5 h-5" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <!-- Google Icon SVG (simplified) -->
+                <path d="M43.611 20.0834H24V28.0834H36.4308C35.8821 31.4395 34.0205 34.1956 31.2588 36.0372L31.1895 36.495L37.892 41.5165L38.3188 41.6881C43.3746 37.1121 46.177 30.6548 46.177 23.8291C46.177 22.5186 46.068 21.238 45.8569 20.0834H43.611V20.0834Z" fill="#4285F4"/>
+                <path d="M24 46.177C30.4079 46.177 36.0825 43.8344 40.0864 39.9995L31.2588 36.0372C28.8751 37.6961 25.8778 38.711 24 38.711C18.6508 38.711 14.1565 35.1517 12.5332 30.3168L12.016 30.3666L5.05927 35.6309L4.85848 35.8361C8.70773 43.5189 15.8665 46.177 24 46.177Z" fill="#34A853"/>
+                <path d="M12.5332 30.3168C12.083 29.0718 11.8341 27.7552 11.8341 26.417C11.8341 25.0788 12.083 23.7622 12.5332 22.5173V22.4674L5.05927 16.7931L4.85848 16.9982C3.1668 20.3755 2.22304 23.7601 2.22304 26.417C2.22304 29.0739 3.1668 32.4585 4.85848 35.8358L12.5332 30.3168Z" fill="#FBBC05"/>
+                <path d="M24 11.6663C27.1672 11.6663 30.1332 12.8711 32.3551 14.9684L40.2312 7.15118C36.0694 3.23594 30.4079 0.833333 24 0.833333C15.8665 0.833333 8.70773 3.49138 4.85848 11.1741L12.5332 16.7931C14.1565 11.9582 18.6508 8.39886 24 8.39886C24 8.39886 24 11.6663 24 11.6663Z" fill="#EA4335"/>
+            </svg>
+            <span>Войти через Google</span>
         </a>
-
-        <p class="mt-8 text-xs text-gray-400">
-            Имя пользователя будет автоматически взято из вашего Google-аккаунта.
-        </p>
     </div>
+
+    <script>
+        // Скрипт для автоматического скрытия flash-сообщений
+        document.addEventListener('DOMContentLoaded', () => {
+            const messages = document.querySelectorAll('.flash-message');
+            messages.forEach(msg => {
+                setTimeout(() => {
+                    msg.style.transition = 'opacity 0.5s ease-out';
+                    msg.style.opacity = '0';
+                    setTimeout(() => msg.remove(), 500);
+                }, 5000); // Сообщение исчезнет через 5 секунд
+            });
+        });
+    </script>
 </body>
 </html>

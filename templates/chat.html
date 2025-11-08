@@ -1,168 +1,261 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Чат | Комната {{ room_name }}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Подключаем Socket.IO клиент -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
-    <style>
-        .chat-container {
-            height: calc(100vh - 80px); /* Высота на весь экран минус высота шапки и подвала */
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column-reverse; /* Показываем новые сообщения снизу */
-        }
-        /* Стиль для сообщения о статусе (вход/выход) */
-        .status-message {
-            text-align: center;
-            font-size: 0.8rem;
-            color: #6b7280;
-            margin: 8px 0;
-        }
-        /* Убедимся, что контейнер сообщений находится в самом низу */
-        .messages-wrapper {
-            display: flex;
-            flex-direction: column-reverse;
-            padding-top: 10px;
-        }
-        /* Стилизация аватаров */
-        .avatar {
-            width: 32px;
-            height: 32px;
-            object-fit: cover;
-        }
-    </style>
-</head>
-<body class="bg-gray-50 flex flex-col min-h-screen font-sans">
+{% extends "base.html" %}
 
-    <!-- Шапка -->
-    <header class="bg-white shadow-md p-3 flex items-center justify-between sticky top-0 z-10">
-        <h1 class="text-xl font-bold text-indigo-700 truncate">
-            Комната: {{ room_name }}
-        </h1>
-        <a href="{{ url_for('room_choice_menu') }}" class="text-sm bg-gray-200 hover:bg-gray-300 text-gray-800 py-1 px-3 rounded-lg transition duration-150">
-            Выйти из комнаты
-        </a>
+{% block title %}Чат: {{ room_name }}{% endblock %}
+
+{% block content %}
+<!-- Подключение Socket.IO клиента -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
+<!-- Подключение Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+    /* Используем шрифт Inter для современного вида */
+    body {
+        font-family: 'Inter', sans-serif;
+        background-color: #f0f4f8; /* Легкий голубовато-серый фон */
+    }
+    .chat-container {
+        height: 100vh;
+        max-width: 1000px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        background-color: white;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    }
+    .message-area {
+        flex-grow: 1;
+        overflow-y: auto;
+        padding: 1rem;
+        scroll-behavior: smooth;
+    }
+    /* Стили для системных сообщений (вход/выход) */
+    .status-message {
+        text-align: center;
+        font-size: 0.85rem;
+        color: #6b7280;
+        padding: 0.5rem 0;
+        margin: 0.5rem 0;
+    }
+    
+    /* Стили для сообщений, отправленных текущим пользователем */
+    .user-message-container {
+        display: flex;
+        justify-content: flex-end;
+    }
+    .user-message {
+        background-color: #1e40af; /* Синий-700 */
+        color: white;
+        border-radius: 12px 12px 2px 12px;
+        padding: 10px 14px;
+        max-width: 80%;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        word-wrap: break-word; /* Обеспечиваем перенос длинных слов */
+        line-height: 1.4;
+    }
+    
+    /* Стили для сообщений других пользователей */
+    .other-message-container {
+        display: flex;
+        justify-content: flex-start;
+    }
+    .other-message {
+        background-color: #f3f4f6; /* Серый-100 */
+        color: #1f2937; /* Серый-800 */
+        border-radius: 12px 12px 12px 2px;
+        padding: 10px 14px;
+        max-width: 80%;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        word-wrap: break-word;
+        line-height: 1.4;
+    }
+
+    .message-timestamp {
+        font-size: 0.65rem;
+        margin-top: 5px;
+        opacity: 0.7;
+    }
+</style>
+
+<div class="chat-container">
+    <!-- Заголовок чата -->
+    <header class="bg-white border-b border-gray-200 p-4 shadow-md flex justify-between items-center sticky top-0 z-10">
+        <div class="flex items-center space-x-3">
+            <a href="{{ url_for('room_choice') }}" class="text-gray-500 hover:text-indigo-600 transition duration-150" title="Вернуться к выбору комнаты">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5m0 0l5-5m-5 5h12"></path></svg>
+            </a>
+            <h2 class="text-xl font-bold text-gray-800">Комната: <span class="text-indigo-600">{{ room_name }}</span></h2>
+        </div>
+        <div class="flex items-center space-x-3">
+            <!-- Отображение текущего пользователя (предполагаем, что user_pic и user_name доступны) -->
+            <div class="flex items-center space-x-2">
+                <span class="text-sm font-medium text-gray-700 hidden sm:inline">{{ user_name }}</span>
+                <img src="{{ user_pic }}" alt="{{ user_name }}" class="w-8 h-8 rounded-full border-2 border-indigo-500" title="{{ user_name }}">
+            </div>
+            
+            <a href="{{ url_for('logout') }}" class="text-sm text-red-500 hover:text-red-700 font-medium transition duration-150">Выход</a>
+        </div>
     </header>
 
-    <!-- Основное тело чата -->
-    <main class="flex-grow p-4 overflow-hidden">
-        <div id="messages" class="chat-container messages-wrapper">
-            <!-- Сообщения будут добавляться сюда JS -->
-            
-            <!-- Загрузка истории сообщений из Flask -->
-            {% for message in messages %}
-                <div class="message-item flex items-start space-x-3 mb-4">
-                    <img class="avatar rounded-full" src="{{ message.user_pic or 'https://placehold.co/32x32/E0E7FF/4F46E5?text=U' }}" alt="Аватар">
-                    <div class="flex-grow">
-                        <div class="flex items-baseline space-x-2">
-                            <span class="font-bold text-gray-800">{{ message.user_name }}</span>
-                            <span class="text-xs text-gray-400">{{ message.timestamp }}</span>
-                        </div>
-                        <p class="bg-white p-3 rounded-xl shadow-sm text-gray-700 mt-1 max-w-full break-words">
-                            {{ message.content }}
-                        </p>
+    <!-- Область сообщений -->
+    <div id="messages" class="message-area">
+        <!-- Исторические сообщения (отрендеренные Flask) -->
+        {% for message in messages %}
+            {% set is_my_message = message.user_name == user_name %}
+            <div class="{% if is_my_message %}user-message-container{% else %}other-message-container{% endif %}">
+                
+                {% if not is_my_message %}
+                    <!-- Аватар для сообщений других пользователей -->
+                    <div class="w-8 h-8 rounded-full overflow-hidden mr-3 mt-1 self-start hidden sm:block">
+                        <img src="{{ message.user_pic }}" alt="{{ message.user_name }}" class="w-full h-full object-cover">
+                    </div>
+                {% endif %}
+                
+                <div class="max-w-full">
+                    <div class="text-xs {% if is_my_message %}text-gray-500 text-right{% else %}text-gray-600 text-left{% endif %} mb-0.5">
+                        <!-- Отображаем имя только для чужих сообщений или если это ваше сообщение и нет аватара -->
+                        {% if not is_my_message or is_my_message and not is_my_message %}
+                            <span class="font-semibold">{{ message.user_name }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="{% if is_my_message %}user-message{% else %}other-message{% endif %}">
+                        <p class="whitespace-pre-wrap">{{ message.content }}</p>
+                        <span class="message-timestamp block {% if is_my_message %}text-right text-indigo-100{% else %}text-left text-gray-500{% endif %}">
+                            {{ message.timestamp }}
+                        </span>
                     </div>
                 </div>
-            {% endfor %}
-            <!-- Конец истории сообщений -->
-        </div>
-    </main>
+            </div>
+        {% endfor %}
+    </div>
 
     <!-- Форма отправки сообщения -->
-    <footer class="bg-white border-t border-gray-200 p-4 sticky bottom-0 z-10">
-        <form id="sendForm" class="flex space-x-3">
-            <input type="text" id="messageInput" placeholder="Введите ваше сообщение..." 
-                   class="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" 
-                   autocomplete="off" required>
-            <button type="submit" class="bg-indigo-600 text-white font-semibold py-3 px-6 rounded-lg 
-                                         hover:bg-indigo-700 transition duration-150 shadow-md">
-                Отправить
+    <div class="p-4 border-t border-gray-200 bg-white sticky bottom-0 z-10">
+        <form id="send-message-form" class="flex space-x-3">
+            <input type="text" id="message-input" placeholder="Введите сообщение..." required autocomplete="off"
+                   class="flex-grow px-4 py-3 border border-gray-300 rounded-full focus:ring-indigo-500 focus:border-indigo-500 shadow-inner transition duration-150"
+                   maxlength="500">
+            <button type="submit" id="send-button"
+                    class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-full transition duration-200 shadow-lg transform hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center disabled:opacity-50"
+                    title="Отправить сообщение">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
             </button>
         </form>
-    </footer>
+    </div>
+</div>
 
-    <script>
-        // Инициализация Socket.IO
-        const socket = io();
-        const messagesDiv = document.getElementById('messages');
-        const form = document.getElementById('sendForm');
-        const messageInput = document.getElementById('messageInput');
+<script>
+    // Инициализация Socket.IO
+    const socket = io();
+    const messagesDiv = document.getElementById('messages');
+    const form = document.getElementById('send-message-form');
+    const input = document.getElementById('message-input');
+    const currentUserName = "{{ user_name }}"; // Имя текущего пользователя для определения стиля сообщения
+    const currentUserPic = "{{ user_pic }}"; // Аватар текущего пользователя
+    
+    // --- Вспомогательные функции ---
 
-        // --- Утилиты для отрисовки ---
-        function renderMessage(data) {
-            const isStatus = data.type === 'status';
+    // Функция для прокрутки области сообщений вниз
+    function scrollToBottom() {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
 
-            // Если это статусное сообщение
-            if (isStatus) {
-                const statusElement = document.createElement('div');
-                statusElement.className = 'status-message';
-                statusElement.textContent = data.msg;
-                messagesDiv.prepend(statusElement); // Добавляем сверху в messagesDiv, который имеет flex-direction: column-reverse
-                return;
-            }
+    // Автоматическая прокрутка при полной загрузке страницы
+    document.addEventListener('DOMContentLoaded', () => {
+        scrollToBottom();
+    });
 
-            // Если это обычное сообщение
-            const messageItem = document.createElement('div');
-            messageItem.className = 'message-item flex items-start space-x-3 mb-4';
-            
-            // Аватар
-            const avatarSrc = data.user_pic || 'https://placehold.co/32x32/E0E7FF/4F46E5?text=U';
-            const avatar = document.createElement('img');
-            avatar.className = 'avatar rounded-full';
-            avatar.src = avatarSrc;
-            avatar.alt = 'Аватар';
+    // Функция для форматирования времени (если нужно) - пока используем то, что приходит с сервера
+    function formatTime(timestamp) {
+        // Здесь можно было бы добавить логику для клиента, 
+        // но пока полагаемся на серверный формат
+        return timestamp; 
+    }
 
-            // Контент сообщения
-            const contentWrapper = document.createElement('div');
-            contentWrapper.className = 'flex-grow';
+    // Функция для добавления нового сообщения в DOM
+    function addMessageToDOM(msg) {
+        const isMyMessage = msg.user_name === currentUserName;
+        
+        const containerClass = isMyMessage ? 'user-message-container' : 'other-message-container';
+        const messageClass = isMyMessage ? 'user-message' : 'other-message';
+        const timeClass = isMyMessage ? 'text-right text-indigo-100' : 'text-left text-gray-500';
 
-            const header = document.createElement('div');
-            header.className = 'flex items-baseline space-x-2';
-            header.innerHTML = `<span class="font-bold text-gray-800">${data.user_name}</span><span class="text-xs text-gray-400">${data.timestamp}</span>`;
+        // Элемент аватара (только для чужих сообщений)
+        const avatarHtml = !isMyMessage ? `
+            <div class="w-8 h-8 rounded-full overflow-hidden mr-3 mt-1 self-start hidden sm:block">
+                <img src="${msg.user_pic}" alt="${msg.user_name}" class="w-full h-full object-cover">
+            </div>
+        ` : '';
 
-            const content = document.createElement('p');
-            content.className = 'bg-white p-3 rounded-xl shadow-sm text-gray-700 mt-1 max-w-full break-words';
-            content.textContent = data.content;
-            
-            contentWrapper.appendChild(header);
-            contentWrapper.appendChild(content);
+        // Элемент с именем пользователя (только для чужих сообщений)
+        const nameHtml = !isMyMessage ? `<span class="font-semibold">${msg.user_name}</span>` : '';
 
-            messageItem.appendChild(avatar);
-            messageItem.appendChild(contentWrapper);
-            
-            messagesDiv.prepend(messageItem); // Добавляем сверху
+
+        const messageElement = `
+            <div class="${containerClass}">
+                ${!isMyMessage ? avatarHtml : ''}
+                <div class="max-w-full">
+                    <div class="text-xs ${isMyMessage ? 'text-gray-500 text-right' : 'text-gray-600 text-left'} mb-0.5">
+                        ${nameHtml}
+                    </div>
+                    <div class="${messageClass}">
+                        <p class="whitespace-pre-wrap">${msg.content}</p>
+                        <span class="message-timestamp block ${timeClass}">
+                            ${formatTime(msg.timestamp)}
+                        </span>
+                    </div>
+                </div>
+                ${isMyMessage ? '' : ''}
+            </div>
+        `;
+
+        messagesDiv.insertAdjacentHTML('beforeend', messageElement);
+        scrollToBottom();
+    }
+    
+    // Функция для добавления статусных сообщений в DOM
+    function addStatusMessageToDOM(data) {
+        const statusElement = `<div class="status-message">${data.msg}</div>`;
+        messagesDiv.insertAdjacentHTML('beforeend', statusElement);
+        scrollToBottom();
+    }
+
+
+    // --- Обработчики Socket.IO ---
+
+    // Подключение к комнате
+    socket.on('connect', function() {
+        // Ничего не делаем здесь, join_room происходит на сервере при маршруте /chat/<room_name>
+    });
+
+    // Обработка отправки сообщения
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const content = input.value.trim();
+        if (content) {
+            // Отправляем на сервер. Сервер добавит имя пользователя, время и т.д.
+            socket.emit('send_message', { content: content });
+            input.value = ''; // Очищаем поле ввода
         }
+    });
 
-        // --- Обработчики Socket.IO ---
+    // Обработка нового сообщения от сервера
+    socket.on('new_message', function(msg) {
+        addMessageToDOM(msg);
+    });
 
-        // При получении нового сообщения
-        socket.on('new_message', function(data) {
-            renderMessage(data);
-        });
+    // Обработка статусных сообщений (подключение/отключение)
+    socket.on('status_message', function(data) {
+        addStatusMessageToDOM(data);
+    });
 
-        // При получении статусного сообщения (кто-то вошел/вышел)
-        socket.on('status_message', function(data) {
-            renderMessage({ msg: data.msg, type: 'status' });
-        });
+    // Обработка ошибок (например, если нет соединения)
+    socket.on('connect_error', (err) => {
+        console.error("Ошибка подключения Socket.IO:", err.message);
+        addStatusMessageToDOM({ msg: `<span class="text-red-500 font-semibold">Ошибка подключения к чату. Пожалуйста, обновите страницу.</span>` });
+    });
+</script>
 
-        // Отправка сообщения
-        form.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const content = messageInput.value.trim();
-
-            if (content) {
-                // Отправляем сообщение на сервер
-                socket.emit('send_message', { content: content });
-                // Очищаем поле ввода
-                messageInput.value = '';
-                // Фокусируем поле ввода
-                messageInput.focus();
-            }
-        });
-
-    </script>
-</body>
-</html>
+{% endblock %}
