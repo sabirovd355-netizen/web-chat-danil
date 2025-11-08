@@ -1,310 +1,274 @@
 import os
-import secrets
-from datetime import datetime, timezone
-from sqlalchemy.orm import DeclarativeBase 
 import eventlet
-# eventlet monkey-patching должно идти ДО ЛЮБЫХ других импортов,
-# использующих стандартные блокирующие функции (например, socket).
+# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Eventlet Monkey-Patching 
+# Этот вызов должен быть выполнен ПЕРЕД ВСЕМИ ОСТАЛЬНЫМИ ИМПОРТАМИ,
+# чтобы обеспечить асинхронную работу Flask-SocketIO с Eventlet.
 eventlet.monkey_patch() 
 
+import json
+import secrets
+from datetime import datetime, timezone
+
+# Удаление неиспользуемых импортов requests и oauthlib для чистоты
 from flask import Flask, render_template, redirect, url_for, request, session, flash
-from flask_socketio import SocketIO, emit, join_room, leave_room, rooms
+from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect, rooms
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-# --- Глобальные, НЕПРИВЯЗАННЫЕ объекты (для фабрики) ---
-# SQLAlchemy и SocketIO инициализируются без привязки к приложению.
-db = SQLAlchemy() 
-socketio = SocketIO(cors_allowed_origins="*") 
+# 1. Глобальные, НЕПРИВЯЗАННЫЕ объекты
+# SQLAlchemy и SocketIO инициализируются без привязки к приложению,
+# чтобы избежать ошибки контекста при импорте.
+db = SQLAlchemy()
+socketio = SocketIO(cors_allowed_origins="*") # CORS для веб-сокетов
 
-# --- ФАБРИЧНАЯ ФУНКЦИЯ ДЛЯ СОЗДАНИЯ ПРИЛОЖЕНИЯ (ОСНОВА) ---
+# 2. Глобальные словари для отслеживания состояния (должны быть вне create_app для Eventlet)
+user_room_map = {}
+typing_users_in_rooms = {}
 
 def create_app():
-    """
-    Фабричная функция для создания и настройки приложения Flask. 
-    Все компоненты, включая модели, инициализируются внутри.
-    """
+    # Конфигурация и Инициализация
     app = Flask(__name__)
     
-    # --- Конфигурация Flask ---
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-    app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", secrets.token_hex(16))
+    # ИСПРАВЛЕНИЕ ДЛЯ RAILWAY (HTTPS):
+    # Это необходимо, чтобы Flask видел, что запрос пришел по HTTPS и корректно работал с сессиями.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
     
-    database_url = os.getenv("DATABASE_URL")
-    if database_url and database_url.startswith("postgres://"):
-        # Исправляем формат URL для совместимости с SQLAlchemy
-        database_url = database_url.replace("postgres://", "postgresql+psycopg2://", 1)
+    # ----------------------------------------------------
+    # КОНФИГУРАЦИЯ
+    # ----------------------------------------------------
+    
+    # Secret Key (из переменной окружения Railway)
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "your_fallback_secret_key_dev")
 
-    app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'sqlite:///chat.db'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    # Конфигурация БД (из переменной окружения Railway)
+    # Используем DATABASE_URL от Railway
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # --- Привязка объектов к приложению ---
+    # Инициализация
     db.init_app(app)
-    socketio.init_app(app, async_mode='eventlet')
-    
-    # --- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ЧАТА (ВНУТРИ ФАБРИКИ) ---
-    # Переносим сюда, чтобы они были доступны только после инициализации
-    user_room_map = {} 
-    typing_users_in_rooms = {} 
-    
-    # --- МОДЕЛИ (ВНУТРИ ФАБРИКИ) ---
-    
-    class Base(DeclarativeBase):
-        pass
-    
-    class User(db.Model):
-        __tablename__ = 'users'
-        id = db.Column(db.String(36), primary_key=True)
-        name = db.Column(db.String(80), nullable=False)
-        unique_name = db.Column(db.String(80), unique=True, nullable=True) 
+    socketio.init_app(app)
 
-        messages = db.relationship('Message', backref='author', lazy=True)
+    # --- ЗДЕСЬ ДОЛЖЕН БЫТЬ ВАШ КОД GOOGLE OAUTH И ЛЮБЫЕ ВАШИ РОУТЫ (@app.route) ---
+    # ...
+
+    # 3. Модели
+    class User(db.Model):
+        id = db.Column(db.Integer, primary_key=True)
+        username = db.Column(db.String(80), unique=True, nullable=False)
+        google_id = db.Column(db.String(120), unique=True, nullable=True)
+        # Добавьте другие поля по необходимости
 
         def __repr__(self):
-            return f'<User {self.name}>'
+            return f'<User {self.username}>'
 
     class Message(db.Model):
-        __tablename__ = 'messages'
         id = db.Column(db.Integer, primary_key=True)
-        room_name = db.Column(db.String(128), nullable=False)
-        user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
-        content = db.Column(db.Text, nullable=False)
-        timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        room = db.Column(db.String(80), nullable=False)
+        user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+        text = db.Column(db.Text, nullable=False)
+        # Убедитесь, что timestamp сохраняется в UTC, как требует Heroku/Railway
+        timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc)) 
+        
+        user = db.relationship('User', backref=db.backref('messages', lazy=True))
 
         def to_dict(self):
-            # Проверяем наличие автора, чтобы избежать ошибки при удалении пользователя
-            author_name = self.author.unique_name if self.author and self.author.unique_name else 'Неизвестный'
             return {
-                'user_id': self.user_id,
-                'user_name': author_name,
-                'content': self.content,
-                'timestamp': self.timestamp.strftime('%H:%M:%S'), 
+                'username': self.user.username,
+                'text': self.text,
+                # Форматируем для отображения
+                'timestamp': self.timestamp.astimezone(timezone.utc).strftime('%H:%M:%S'),
+                'is_admin': self.user.username.lower() == 'admin' # Пример логики для администратора
             }
-    
-    # --- Регистрация Обработчиков БД и Роутов ---
 
-    @app.before_request
-    def ensure_tables_exist():
-        if not hasattr(app, 'tables_created') or not app.tables_created:
-            with app.app_context():
-                try:
-                    db.create_all() 
-                    print("Таблицы базы данных созданы (или уже существовали).")
-                    app.tables_created = True
-                except Exception as e:
-                    print(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать таблицы БД: {e}")
-                    pass
+    # 4. Создание таблиц БД
+    # В реальном приложении это лучше делать через миграции Alembic,
+    # но для простоты развертывания на Railway можно использовать этот метод.
+    with app.app_context():
+        # Если база данных не инициализирована (например, при первом развертывании)
+        try:
+            db.create_all()
+        except Exception as e:
+            # При повторных запусках это может вызвать предупреждение/ошибку, которую можно игнорировать
+            print(f"Database tables might already exist: {e}")
+
+    # ----------------------------------------------------
+    # АВТОРИЗАЦИЯ GOOGLE OAUTH (пример)
+    # ----------------------------------------------------
     
-    # --- Роуты Flask ---
+    # Здесь должен быть ваш код для OAUTH
+    # @app.route('/login') ...
+    # @app.route('/callback') ...
+    
+    # ПРИМЕР РОУТИНГА
     @app.route('/')
     def index():
         if 'user_id' in session:
-            # Перенаправляем на новое имя шаблона
-            return render_template('room_selection.html', user_name=session.get('user_name'))
-        # Используем обновленный шаблон login.html
-        return render_template('login.html')
+            # Замените 'index.html' на ваш шаблон
+            return render_template('index.html', username=User.query.get(session['user_id']).username) 
+        return redirect(url_for('login')) 
 
-    @app.route('/login', methods=['POST'])
+    @app.route('/login')
     def login():
-        username = request.form.get('username').strip()
-        if not username or len(username) < 3 or len(username) > 30:
-            flash('Имя пользователя должно быть от 3 до 30 символов.', 'error')
-            return redirect(url_for('index'))
-        
-        unique_name = username.lower()
-        user = User.query.filter_by(unique_name=unique_name).first()
+        # Замените 'login.html' на ваш шаблон
+        return render_template('login.html') 
 
-        if not user:
-            user_id = secrets.token_urlsafe(16)
-            user = User(id=user_id, name=username, unique_name=unique_name) 
-            try:
-                db.session.add(user)
-                db.session.commit()
-            except Exception as e:
-                db.session.rollback()
-                flash('Произошла ошибка при создании пользователя.', 'error')
-                return redirect(url_for('index'))
-        
-        session['user_id'] = user.id
-        session['user_name'] = user.name
-        session['unique_name'] = user.unique_name
-        
-        # Перенаправляем на выбор комнаты
-        return redirect(url_for('index'))
-
-    @app.route('/logout')
-    def logout():
-        # НЕ ВЫЗЫВАЙТЕ socketio.disconnect() в HTTP-роуте, это вызовет ошибку.
-        # Просто очищаем сессию. Сокет сам обработает отключение.
-        if 'user_id' in session and session['user_id'] in user_room_map:
-            # Пытаемся удалить пользователя из карты, чтобы избежать "мертвых" записей
-            user_room_map.pop(session['user_id'], None)
-
-        session.pop('user_id', None)
-        session.pop('user_name', None)
-        session.pop('unique_name', None)
-        flash('Вы вышли из системы.', 'success')
-        return redirect(url_for('index'))
-
-    # Роут для выбора комнаты (если пользователь уже вошел)
-    @app.route('/room_selection', methods=['GET', 'POST'])
-    def room_selection():
-        if 'user_id' not in session:
-            flash('Сначала войдите в систему.', 'error')
-            return redirect(url_for('index'))
-        
-        if request.method == 'POST':
-            room_name = request.form.get('room_name', '').strip()
-
-            if not room_name or len(room_name) > 50:
-                flash('Имя комнаты не может быть пустым или слишком длинным.', 'error')
-                return redirect(url_for('room_selection'))
-            
-            # Перенаправляем в комнату
-            return redirect(url_for('chat_room', room_name=room_name))
-
-        # При GET-запросе показываем шаблон выбора
-        return render_template(
-            'room_selection.html', 
-            user_name=session.get('user_name'),
-            popular_rooms=['General', 'Development', 'Random']
-        )
+    # ----------------------------------------------------
+    # ОБРАБОТЧИКИ SOCKETIO
+    # ----------------------------------------------------
     
-    # Роут для отображения чат-комнаты
-    @app.route('/chat/<room_name>')
-    def chat_room(room_name):
-        if 'user_id' not in session:
-            flash('Сначала войдите в систему.', 'error')
-            return redirect(url_for('index'))
-
-        return render_template(
-            'chat.html', 
-            room_name=room_name, 
-            user_id=session['user_id']
-        )
-    
-    # --- SocketIO обработчики (ВНУТРИ ФАБРИКИ) ---
-
     @socketio.on('join')
     def on_join(data):
-        user_id = session.get("user_id")
-        user_name = session.get("user_name")
-        room_name = data.get('room')
-
-        if not all([user_id, user_name, room_name]):
-            emit('error_message', {'msg': 'Не удалось присоединиться к комнате.'})
+        room = data.get('room')
+        user_id = session.get('user_id')
+        
+        if not user_id or not room:
             return
 
-        # 1. Сначала выходим из старой комнаты, если она была
-        if user_id in user_room_map and user_room_map[user_id] != room_name:
-            old_room = user_room_map[user_id]
-            leave_room(old_room)
-            # Отправляем сообщение об уходе в старую комнату
-            emit('status_message', {'msg': f'{user_name} покинул комнату.'}, room=old_room)
-            
-        # 2. Присоединяемся к новой комнате
-        join_room(room_name)
-        user_room_map[user_id] = room_name 
-        
-        # 3. Отправляем сообщение о присоединении всем, кроме себя
-        emit('status_message', 
-             {'msg': f'{user_name} присоединился к комнате.'}, 
-             room=room_name, include_self=False) 
-
-        # 4. Загрузка истории сообщений (Теперь модели ДОСТУПНЫ)
         with app.app_context():
-            # Загружаем последние 50 сообщений
-            messages = Message.query.filter_by(room_name=room_name).order_by(Message.timestamp.desc()).limit(50).all()
-            messages.reverse() 
-            history = [msg.to_dict() for msg in messages]
-            emit('message_history', {'history': history, 'user_name': user_name})
+            user = User.query.get(user_id)
+            if not user:
+                return
+                
+            username = user.username
+            join_room(room)
+            user_room_map[request.sid] = room
+            
+            # Отправка истории сообщений
+            messages = Message.query.filter_by(room=room).order_by(Message.timestamp.desc()).limit(50).all()
+            # Отправляем в обратном порядке, чтобы новые были внизу
+            messages_data = [msg.to_dict() for msg in reversed(messages)]
+            emit('message_history', messages_data, room=request.sid)
 
-    @socketio.on('disconnect')
-    def handle_disconnect():
-        user_id = session.get("user_id")
-        user_name = session.get("user_name")
+            # Сообщаем всем в комнате
+            emit('status', {'msg': f'{username} присоединился к комнате {room}.'}, room=room)
+            
+            # Обновление списка активных пользователей
+            # update_active_users(room) # Используйте, когда будет полностью реализована
+
+    @socketio.on('text')
+    def on_text(data):
+        room = user_room_map.get(request.sid)
+        user_id = session.get('user_id')
+        text = data.get('msg')
         
-        # Обработка состояния отключения и удаления из карты
-        if user_id in user_room_map:
-            room_name = user_room_map.pop(user_id)
-            
-            # Удаляем пользователя из индикаторов печати
-            if room_name in typing_users_in_rooms and user_id in typing_users_in_rooms[room_name]:
-                typing_users_in_rooms[room_name].pop(user_id, None)
-                emit('typing_status', 
-                     {'user_id': user_id, 'user_name': user_name, 'is_typing': False}, 
-                     room=room_name, include_self=False)
-            
-            # Сообщаем всем, что пользователь покинул комнату
-            emit('status_message', {'msg': f'{user_name} покинул комнату {room_name}.'}, room=room_name)
-
-    @socketio.on('send_message')
-    def handle_message(data):
-        user_id = session.get("user_id")
-        room_name = user_room_map.get(user_id)
-        content = data.get('content', '').strip()
-        user_name = session.get("user_name")
-
-        if not all([user_id, room_name, content, user_name]) or len(content) > 500:
-            return 
+        if not room or not user_id or not text:
+            return
 
         with app.app_context():
-            # Теперь User и Message определены и доступны
             user = User.query.get(user_id)
             if not user:
                 return
 
-            new_message = Message(room_name=room_name, user_id=user_id, content=content)
-            try:
-                db.session.add(new_message)
-                db.session.commit()
-                message_data = new_message.to_dict()
-                socketio.emit('new_message', message_data, room=room_name)
-            except Exception as e:
-                db.session.rollback()
-                print(f"Ошибка базы данных при сохранении сообщения: {e}")
-                emit('error_message', {'msg': 'Ошибка сервера при сохранении сообщения.'})
+            # Сохранение сообщения в БД
+            new_message = Message(room=room, user=user, text=text)
+            db.session.add(new_message)
+            db.session.commit()
+            
+            # Отправка сообщения всем в комнате
+            emit('message', new_message.to_dict(), room=room)
+
+    @socketio.on('typing')
+    def on_typing(data):
+        room = user_room_map.get(request.sid)
+        user_id = session.get('user_id')
+        is_typing = data.get('is_typing', False)
+        
+        if not room or not user_id:
+            return
+
+        with app.app_context():
+            user = User.query.get(user_id)
+            if not user:
+                return
+            
+            username = user.username
+            
+            # Обновление состояния печатающих пользователей
+            if room not in typing_users_in_rooms:
+                typing_users_in_rooms[room] = set()
+
+            if is_typing:
+                typing_users_in_rooms[room].add(username)
+            else:
+                typing_users_in_rooms[room].discard(username)
+
+            # Отправка обновленного списка печатающих пользователей
+            typing_list = list(typing_users_in_rooms[room])
+            emit('typing_status', {'typing_users': typing_list}, room=room, include_self=False)
+
+
+    @socketio.on('leave')
+    def on_leave(data):
+        room = data.get('room')
+        user_id = session.get('user_id')
+        
+        if not user_id or not room:
+            return
+
+        with app.app_context():
+            user = User.query.get(user_id)
+            if not user:
+                return
+                
+            username = user.username
+            
+            leave_room(room)
+            if request.sid in user_room_map:
+                del user_room_map[request.sid]
+            
+            # Сообщаем всем в комнате
+            emit('status', {'msg': f'{username} покинул комнату {room}.'}, room=room)
+
+            # Обновление списка активных пользователей
+            # update_active_users(room) # Используйте, когда будет полностью реализована
+
+
+    @socketio.on('disconnect')
+    def on_disconnect():
+        # Находим комнату, в которой был пользователь
+        room = user_room_map.pop(request.sid, None)
+        user_id = session.get('user_id')
+        
+        if not room or not user_id:
+            return
+
+        with app.app_context():
+            user = User.query.get(user_id)
+            if not user:
+                return
+                
+            username = user.username
+            
+            # Удаление из списка печатающих
+            if room in typing_users_in_rooms:
+                typing_users_in_rooms[room].discard(username)
+                
+            # Сообщаем всем в комнате (которую он покинул)
+            emit('status', {'msg': f'{username} отключился.'}, room=room)
+            
+            # Обновление списка активных пользователей
+            # update_active_users(room) # Используйте, когда будет полностью реализована
+
     
-    # ... (логика индикаторов печати)
-    @socketio.on('start_typing')
-    def handle_start_typing():
-        user_id = session.get("user_id")
-        user_name = session.get("user_name")
-        room_name = user_room_map.get(user_id)
-        
-        if not all([user_id, room_name]): return
-        if room_name not in typing_users_in_rooms: typing_users_in_rooms[room_name] = {}
-            
-        typing_users_in_rooms[room_name][user_id] = user_name
-        
-        emit('typing_status', 
-             {'user_id': user_id, 'user_name': user_name, 'is_typing': True}, 
-             room=room_name, include_self=False)
-
-    @socketio.on('stop_typing')
-    def handle_stop_typing():
-        user_id = session.get("user_id")
-        room_name = user_room_map.get(user_id)
-        
-        if not all([user_id, room_name]): return
-            
-        if room_name in typing_users_in_rooms and user_id in typing_users_in_rooms[room_name]:
-            typing_users_in_rooms[room_name].pop(user_id, None)
-        
-        emit('typing_status', 
-             {'user_id': user_id, 'user_name': session['user_name'], 'is_typing': False}, 
-             room=room_name, include_self=False)
-
+    # ----------------------------------------------------
+    # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (пока не полностью реализованы)
+    # ----------------------------------------------------
+    
+    def update_active_users(room):
+        # Эта функция требует надежного способа маппинга SID -> User, 
+        # который выходит за рамки простой сессии Flask.
+        pass
 
     return app
 
-
-# --- Запуск приложения ---
-
-# Gunicorn импортирует ЭТУ переменную 'app'
+# Запуск приложения
 app = create_app()
 
 if __name__ == '__main__':
-    # Для локального запуска используем socketio.run
-    print("Локальный запуск Eventlet/SocketIO...")
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    # Локальный запуск (этот код не будет работать на Railway)
+    socketio.run(app, debug=True)
+
+# Точка входа для Gunicorn/Railway: 
+# Gunicorn будет искать переменную 'app' в этом файле.
+# gunicorn --worker-class eventlet -w 1 main:app
